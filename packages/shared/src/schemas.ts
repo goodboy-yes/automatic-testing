@@ -61,10 +61,25 @@ export const testCaseSchema = z.object({
   updatedAt: z.string(),
 });
 
-export const createRunSchema = z.object({
+const createRunBaseSchema = z.object({
   projectId: idSchema,
   environmentId: idSchema,
-  scopeType: runScopeTypeSchema,
-  scopeId: idSchema.optional(),
-  caseIds: z.array(idSchema).optional(),
 });
+
+export const createRunSchema = z.discriminatedUnion('scopeType', [
+  createRunBaseSchema.extend({
+    scopeType: z.literal('case'),
+    scopeId: idSchema,
+    caseIds: z.array(idSchema).optional(),
+  }),
+  createRunBaseSchema.extend({
+    scopeType: z.literal('suite'),
+    scopeId: idSchema,
+    caseIds: z.array(idSchema).optional(),
+  }),
+  createRunBaseSchema.extend({
+    scopeType: z.literal('selection'),
+    scopeId: idSchema.optional(),
+    caseIds: z.array(idSchema).nonempty(),
+  }),
+]);
