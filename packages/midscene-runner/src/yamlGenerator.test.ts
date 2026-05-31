@@ -126,4 +126,24 @@ describe('generateMidsceneYaml', () => {
       },
     ]);
   });
+
+  it('rejects non-positive wait durations', () => {
+    expect(() =>
+      generateMidsceneYaml({
+        environment,
+        testCase: {
+          ...testCase,
+          steps: [
+            {
+              id: 'step_wait',
+              type: 'wait',
+              title: '无效等待',
+              enabled: true,
+              params: { milliseconds: 0 },
+            },
+          ],
+        },
+      })
+    ).toThrow('Wait step step_wait requires a positive milliseconds value');
+  });
 });
