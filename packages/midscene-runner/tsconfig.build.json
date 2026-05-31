@@ -5,10 +5,9 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "paths": {
-      "@automatic-testing/shared": ["packages/midscene-runner/src/shared.d.ts"]
-    }
+    "composite": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts"],
+  "references": [{ "path": "../shared" }]
 }
