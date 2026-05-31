@@ -10,7 +10,7 @@ type MidsceneTask = Record<string, unknown>;
 
 export function generateMidsceneYaml(input: GenerateMidsceneYamlInput): string {
   const { environment, testCase } = input;
-  const tasks = testCase.steps.filter((step) => step.enabled).map(convertStep);
+  const flow = testCase.steps.filter((step) => step.enabled).map(convertStep);
 
   return YAML.stringify({
     web: {
@@ -18,7 +18,12 @@ export function generateMidsceneYaml(input: GenerateMidsceneYamlInput): string {
       viewportWidth: environment.viewportWidth,
       viewportHeight: environment.viewportHeight,
     },
-    tasks,
+    tasks: [
+      {
+        name: testCase.name,
+        flow,
+      },
+    ],
   });
 }
 
@@ -57,12 +62,24 @@ function convertStep(step: Step): MidsceneTask {
 }
 
 function buildActionTask(action: string, params: Record<string, unknown>): MidsceneTask {
+  const entries = Object.entries(params);
+
   if ('prompt' in params && typeof params.prompt === 'string') {
-    return { [action]: params.prompt };
+    if (entries.length === 1) {
+      return { [action]: params.prompt };
+    }
+
+    const { prompt, ...rest } = params;
+    return { [action]: prompt, ...rest };
   }
 
   if ('locate' in params && typeof params.locate === 'string') {
-    return { [action]: params.locate };
+    if (entries.length === 1) {
+      return { [action]: params.locate };
+    }
+
+    const { locate, ...rest } = params;
+    return { [action]: locate, ...rest };
   }
 
   return { [action]: params };
