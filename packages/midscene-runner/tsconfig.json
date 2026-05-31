@@ -1,14 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
-    "module": "ESNext",
-    "baseUrl": ".",
-    "paths": {
-      "@automatic-testing/shared": ["../shared/dist/index.d.ts"]
-    }
+    "noEmit": true,
+    "module": "ESNext"
   },
   "include": ["src"]
 }

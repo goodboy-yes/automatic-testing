@@ -6,8 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "pnpm --filter @automatic-testing/shared build && tsc -p tsconfig.json",
-    "typecheck": "pnpm --filter @automatic-testing/shared build && tsc -p tsconfig.json --noEmit",
+    "build": "pnpm --filter @automatic-testing/shared build && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
