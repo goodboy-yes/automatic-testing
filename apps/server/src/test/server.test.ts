@@ -71,7 +71,7 @@ describe('test asset API', () => {
     const listResponse = await app.inject({ method: 'GET', url: '/api/projects' });
     await app.close();
 
-    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.statusCode).toBe(201);
     expect(createResponse.json()).toMatchObject({
       name: 'Web 自动化',
       description: '核心项目',
@@ -105,7 +105,7 @@ describe('test asset API', () => {
     });
     await app.close();
 
-    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.statusCode).toBe(201);
     expect(createResponse.json()).toMatchObject({
       project_id: project.id,
       name: '本地环境',
@@ -136,7 +136,7 @@ describe('test asset API', () => {
     });
     await app.close();
 
-    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.statusCode).toBe(201);
     expect(createResponse.json()).toMatchObject({
       project_id: project.id,
       name: '冒烟测试',
@@ -156,7 +156,7 @@ describe('test asset API', () => {
     const createResponse = await app.inject({
       method: 'POST',
       url: `/api/suites/${suite.id}/cases`,
-      payload: { projectId: project.id, name: '登录成功', description: '使用有效账号登录' },
+      payload: { projectId: 'different-project', name: '登录成功', description: '使用有效账号登录' },
     });
     const listResponse = await app.inject({
       method: 'GET',
@@ -168,7 +168,7 @@ describe('test asset API', () => {
     });
     await app.close();
 
-    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.statusCode).toBe(201);
     expect(createResponse.json()).toMatchObject({
       project_id: project.id,
       suite_id: suite.id,
@@ -193,6 +193,70 @@ describe('test asset API', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ message: 'Test case not found' });
+  });
+
+  it('returns 400 when creating a project without a name', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { description: '缺少名称' },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('returns 404 when creating an environment under a missing project', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/projects/missing-project/environments',
+      payload: {
+        name: '本地环境',
+        baseUrl: 'https://example.com',
+        browserType: 'chromium',
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        defaultTimeoutMs: 10000,
+        isDefault: true,
+      },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('returns 404 when creating a suite under a missing project', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/projects/missing-project/suites',
+      payload: { name: '冒烟测试' },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('returns 404 when creating a case under a missing suite', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/suites/missing-suite/cases',
+      payload: { name: '登录成功' },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(404);
   });
 });
 

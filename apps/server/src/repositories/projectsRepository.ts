@@ -21,6 +21,10 @@ export function createProjectRepository(db: DatabaseConnection) {
       return db.prepare<[], ProjectRow>('SELECT * FROM projects ORDER BY updated_at DESC').all();
     },
 
+    findById(projectId: string): ProjectRow | undefined {
+      return db.prepare<[string], ProjectRow>('SELECT * FROM projects WHERE id = ?').get(projectId);
+    },
+
     create(input: CreateProjectInput): ProjectRow {
       const now = new Date().toISOString();
       const project: ProjectRow = {

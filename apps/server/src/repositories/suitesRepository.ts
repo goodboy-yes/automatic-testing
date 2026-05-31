@@ -25,6 +25,10 @@ export function createSuiteRepository(db: DatabaseConnection) {
         .all(projectId);
     },
 
+    findById(suiteId: string): SuiteRow | undefined {
+      return db.prepare<[string], SuiteRow>('SELECT * FROM test_suites WHERE id = ?').get(suiteId);
+    },
+
     create(input: CreateSuiteInput): SuiteRow {
       const now = new Date().toISOString();
       const suite: SuiteRow = {
