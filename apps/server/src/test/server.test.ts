@@ -57,3 +57,179 @@ describe('server bootstrap', () => {
     expect(response.json()).toEqual({ ok: true, database: true });
   });
 });
+
+describe('test asset API', () => {
+  it('creates and lists projects', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Web 自动化', description: '核心项目' },
+    });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/projects' });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({
+      name: 'Web 自动化',
+      description: '核心项目',
+      default_environment_id: null,
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([createResponse.json()]);
+  });
+
+  it('creates and lists environments for a project', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/environments`,
+      payload: {
+        name: '本地环境',
+        baseUrl: 'https://example.com',
+        browserType: 'chromium',
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        defaultTimeoutMs: 10000,
+        isDefault: true,
+      },
+    });
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/environments`,
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({
+      project_id: project.id,
+      name: '本地环境',
+      base_url: 'https://example.com',
+      browser_type: 'chromium',
+      viewport_width: 1280,
+      viewport_height: 720,
+      default_timeout_ms: 10000,
+      is_default: 1,
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([createResponse.json()]);
+  });
+
+  it('creates and lists suites for a project', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/suites`,
+      payload: { name: '冒烟测试', description: '关键路径' },
+    });
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/suites`,
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({
+      project_id: project.id,
+      name: '冒烟测试',
+      description: '关键路径',
+      enabled: 1,
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([createResponse.json()]);
+  });
+
+  it('creates, lists, and fetches cases for a suite', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const suite = await createSuite(app, project.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: `/api/suites/${suite.id}/cases`,
+      payload: { projectId: project.id, name: '登录成功', description: '使用有效账号登录' },
+    });
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/suites/${suite.id}/cases`,
+    });
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: `/api/cases/${createResponse.json<TestCaseResponse>().id}`,
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({
+      project_id: project.id,
+      suite_id: suite.id,
+      name: '登录成功',
+      description: '使用有效账号登录',
+      enabled: 1,
+      tags_json: '[]',
+      steps_json: '[]',
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([createResponse.json()]);
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toEqual(createResponse.json());
+  });
+
+  it('returns 404 when fetching a missing case', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+
+    const response = await app.inject({ method: 'GET', url: '/api/cases/missing-case' });
+    await app.close();
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ message: 'Test case not found' });
+  });
+});
+
+interface ProjectResponse {
+  id: string;
+}
+
+interface SuiteResponse {
+  id: string;
+}
+
+interface TestCaseResponse {
+  id: string;
+}
+
+async function createTestApp() {
+  const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
+  databasePaths.push(databasePath);
+  const db = openDatabase(databasePath);
+  const app = await buildApp({ db });
+  return { app, db };
+}
+
+async function createProject(app: Awaited<ReturnType<typeof buildApp>>): Promise<ProjectResponse> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/projects',
+    payload: { name: 'Web 自动化' },
+  });
+  return response.json<ProjectResponse>();
+}
+
+async function createSuite(app: Awaited<ReturnType<typeof buildApp>>, projectId: string): Promise<SuiteResponse> {
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/suites`,
+    payload: { name: '冒烟测试' },
+  });
+  return response.json<SuiteResponse>();
+}
