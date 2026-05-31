@@ -6,7 +6,7 @@
     "rootDir": "src",
     "declaration": true,
     "paths": {
-      "@automatic-testing/shared": ["../shared"]
+      "@automatic-testing/shared": ["packages/midscene-runner/src/shared.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],
