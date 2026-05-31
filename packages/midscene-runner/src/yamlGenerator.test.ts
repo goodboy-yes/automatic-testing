@@ -87,7 +87,6 @@ describe('generateMidsceneYaml', () => {
       {
         name: '登录成功',
         flow: [
-          { sleep: 0 },
           { aiTap: '登录按钮' },
           { aiInput: '邮箱输入框', value: 'test@example.com' },
           { aiHover: '用户头像', deepLocate: true },

@@ -10,7 +10,9 @@ type MidsceneTask = Record<string, unknown>;
 
 export function generateMidsceneYaml(input: GenerateMidsceneYamlInput): string {
   const { environment, testCase } = input;
-  const flow = testCase.steps.filter((step) => step.enabled).map(convertStep);
+  const flow = testCase.steps
+    .filter((step) => step.enabled && step.type !== 'navigate')
+    .map(convertStep);
 
   return YAML.stringify({
     web: {
@@ -40,10 +42,6 @@ function buildUrl(baseUrl: string, path: string): string {
 }
 
 function convertStep(step: Step): MidsceneTask {
-  if (step.type === 'navigate') {
-    return { sleep: 0 };
-  }
-
   if (step.type === 'wait') {
     const milliseconds = Number(step.params.milliseconds ?? step.params.ms ?? 1000);
     return { sleep: milliseconds };
