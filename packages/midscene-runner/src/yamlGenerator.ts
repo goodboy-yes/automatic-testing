@@ -82,5 +82,10 @@ function buildActionTask(action: string, params: Record<string, unknown>): Midsc
     return { [action]: locate, ...rest };
   }
 
+  if ('locate' in params) {
+    const { locate, ...rest } = params;
+    return { [action]: null, locate, ...rest };
+  }
+
   return { [action]: params };
 }

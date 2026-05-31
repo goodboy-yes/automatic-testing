@@ -96,4 +96,35 @@ describe('generateMidsceneYaml', () => {
       },
     ]);
   });
+
+  it('keeps rich locate options at the flow item level', () => {
+    const yaml = generateMidsceneYaml({
+      environment,
+      testCase: {
+        ...testCase,
+        steps: [
+          {
+            id: 'step_upload',
+            type: 'native',
+            title: '上传文件',
+            enabled: true,
+            params: {
+              action: 'aiTap',
+              locate: { prompt: '上传按钮', deepThink: true },
+              fileChooserAccept: '.pdf',
+            },
+          },
+        ],
+      },
+    });
+    const document = YAML.parse(yaml);
+
+    expect(document.tasks[0].flow).toEqual([
+      {
+        aiTap: null,
+        locate: { prompt: '上传按钮', deepThink: true },
+        fileChooserAccept: '.pdf',
+      },
+    ]);
+  });
 });
