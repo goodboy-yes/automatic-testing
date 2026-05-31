@@ -25,7 +25,7 @@
 ### 首版范围
 
 - 使用 monorepo 组织前端、后端、共享 schema 和 Midscene runner。
-- 前端使用 Vite + React。
+- 前端使用 Vite + React + Ant Design v6。
 - 后端使用 Node.js。
 - 支持项目、环境、测试套件、测试用例管理。
 - 测试资产层级为：项目 -> 测试套件 -> 测试用例 -> 步骤。
@@ -71,7 +71,7 @@
 ```text
 automatic-testing/
   apps/
-    web/                 # Vite + React 前端
+    web/                 # Vite + React + Ant Design v6 前端
     server/              # Node.js API、队列和 Worker
   packages/
     shared/              # 共享类型、schema、枚举、API DTO
@@ -606,13 +606,25 @@ GET /artifacts/runs/:runId/*
 
 ```text
 React Router：路由
+Ant Design v6：后台管理系统 UI 组件库
 React Query：API 数据、缓存、轮询、失效刷新
 Zustand：编辑器本地状态和未保存变更
 Monaco Editor：YAML 源码模式
 React Hook Form + Zod：表单和 schema 校验
 ```
 
-应用应该表现为一个工作型内部工具。不要做营销页风格，优先保证信息密度、可扫描性和重复操作效率。
+应用应该表现为一个工作型内部工具，整体风格接近后台管理系统。页面应优先使用 Ant Design v6 的布局、表格、表单、抽屉、弹窗、标签页、状态标签、分页、筛选、通知和反馈组件。
+
+设计原则：
+
+```text
+优先信息密度和可扫描性，不做营销页或官网式首页。
+项目内使用稳定的顶部栏、侧边栏和内容区布局。
+列表页以表格、筛选、批量操作和状态展示为主。
+编辑页以表单、步骤列表、源码编辑器和预览面板为主。
+报告页以状态摘要、结果表格、步骤详情、日志和产物入口为主。
+视觉风格保持克制、清晰、适合长时间使用。
+```
 
 ## 12. 非功能需求
 
