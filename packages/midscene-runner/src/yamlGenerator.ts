@@ -43,7 +43,11 @@ function buildUrl(baseUrl: string, path: string): string {
 
 function convertStep(step: Step): MidsceneTask {
   if (step.type === 'wait') {
-    const milliseconds = Number(step.params.milliseconds ?? step.params.ms ?? 1000);
+    const rawMilliseconds = step.params.milliseconds ?? step.params.ms ?? 1000;
+    const milliseconds =
+      typeof rawMilliseconds === 'number' || typeof rawMilliseconds === 'string'
+        ? Number(rawMilliseconds)
+        : Number.NaN;
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
       throw new Error(`Wait step ${step.id} requires a positive milliseconds value`);
     }

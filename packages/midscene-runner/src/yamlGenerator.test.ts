@@ -127,7 +127,13 @@ describe('generateMidsceneYaml', () => {
     ]);
   });
 
-  it('rejects non-positive wait durations', () => {
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['boolean', true],
+  ])('rejects invalid wait duration: %s', (_label, milliseconds) => {
     expect(() =>
       generateMidsceneYaml({
         environment,
@@ -139,7 +145,7 @@ describe('generateMidsceneYaml', () => {
               type: 'wait',
               title: '无效等待',
               enabled: true,
-              params: { milliseconds: 0 },
+              params: { milliseconds },
             },
           ],
         },
