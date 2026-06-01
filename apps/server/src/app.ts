@@ -8,11 +8,13 @@ import { registerEnvironmentsRoutes } from './routes/environmentsRoutes.js';
 import { registerProjectsRoutes } from './routes/projectsRoutes.js';
 import { registerRunsRoutes } from './routes/runsRoutes.js';
 import { registerSuitesRoutes } from './routes/suitesRoutes.js';
+import type { RunCancellationRegistry } from './worker/runCancellation.js';
 
 export interface BuildAppOptions {
   db: DatabaseConnection;
   runQueue?: RunQueuePort;
   artifactsDir?: string;
+  cancellation?: RunCancellationRegistry;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -34,6 +36,7 @@ export async function buildApp(options: BuildAppOptions) {
     options.db,
     options.runQueue ?? { enqueue: () => undefined },
     options.artifactsDir ?? path.resolve('artifacts'),
+    options.cancellation,
   );
 
   return app;

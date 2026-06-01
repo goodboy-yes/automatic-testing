@@ -9,6 +9,7 @@ import type { RunQueuePort } from '../queue/runQueue.js';
 import type { CaseRow } from '../repositories/casesRepository.js';
 import { createArtifactsRepository } from '../repositories/artifactsRepository.js';
 import { createRunsRepository } from '../repositories/runsRepository.js';
+import type { RunCancellationRegistry } from '../worker/runCancellation.js';
 import { parseRequestBody } from './validation.js';
 
 type CreateRunBody = z.infer<typeof createRunSchema>;
@@ -18,6 +19,7 @@ export async function registerRunsRoutes(
   db: DatabaseConnection,
   queue: RunQueuePort,
   artifactsDir: string,
+  cancellation?: RunCancellationRegistry,
 ) {
   const runs = createRunsRepository(db);
   const artifacts = createArtifactsRepository(db);
@@ -73,6 +75,7 @@ export async function registerRunsRoutes(
     }
 
     queue.cancel?.(run.id);
+    cancellation?.cancel(run.id);
     const canceledRun = runs.cancel(run.id);
     if (!canceledRun) {
       return reply.code(404).send({ message: 'Run not found' });

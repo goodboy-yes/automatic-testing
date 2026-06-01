@@ -8,7 +8,9 @@ export interface RunProcessInput {
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  shell?: boolean;
   signal?: AbortSignal;
+  killProcessTree?: (pid: number) => Promise<void>;
 }
 
 export interface RunProcessResult {
@@ -58,11 +60,26 @@ export function spawnProcess(input: RunProcessInput): Promise<RunProcessResult> 
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       env: { ...process.env, ...input.env },
-      shell: process.platform === 'win32',
+      shell: input.shell ?? (process.platform === 'win32'),
+      detached: process.platform !== 'win32',
       windowsHide: true,
     });
     let stdout = '';
     let stderr = '';
+    let aborted = false;
+
+    const abortListener = () => {
+      aborted = true;
+      if (child.pid) {
+        void (input.killProcessTree ?? defaultKillProcessTree)(child.pid);
+      }
+    };
+
+    if (input.signal?.aborted) {
+      abortListener();
+    } else {
+      input.signal?.addEventListener('abort', abortListener, { once: true });
+    }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
@@ -70,20 +87,27 @@ export function spawnProcess(input: RunProcessInput): Promise<RunProcessResult> 
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
     });
-    input.signal?.addEventListener(
-      'abort',
-      () => {
-        child.kill('SIGTERM');
-      },
-      { once: true },
-    );
     child.on('error', (error) => {
       stderr += error.message;
     });
     child.on('close', (exitCode) => {
-      resolve({ exitCode, stdout, stderr });
+      input.signal?.removeEventListener('abort', abortListener);
+      resolve({ exitCode: aborted ? null : exitCode, stdout, stderr });
     });
   });
+}
+
+async function defaultKillProcessTree(pid: number) {
+  if (process.platform === 'win32') {
+    await spawnProcess({ command: 'taskkill', args: ['/pid', String(pid), '/T', '/F'], cwd: process.cwd(), shell: true });
+    return;
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    process.kill(pid, 'SIGTERM');
+  }
 }
 
 function getExecutionStatus(result: RunProcessResult): MidsceneExecutionStatus {

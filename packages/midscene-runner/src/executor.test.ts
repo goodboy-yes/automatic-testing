@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runMidsceneYaml, type ProcessRunner } from './executor.js';
+import { runMidsceneYaml, spawnProcess, type ProcessRunner } from './executor.js';
 
 describe('runMidsceneYaml', () => {
   it('runs the Midscene CLI with yaml path, output dir, and summary file', async () => {
@@ -67,5 +67,62 @@ describe('runMidsceneYaml', () => {
 
     expect(runProcess.mock.calls?.[0]?.[0]?.signal).toBe(controller.signal);
     expect(result.status).toBe('canceled');
+  });
+});
+
+describe('spawnProcess', () => {
+  it('terminates the spawned process tree when aborted', async () => {
+    const killedCommands: string[] = [];
+    const controller = new AbortController();
+    const resultPromise = spawnProcess({
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 30000)'],
+      cwd: process.cwd(),
+      shell: false,
+      signal: controller.signal,
+      killProcessTree: async (pid) => {
+        killedCommands.push(String(pid));
+        process.kill(pid, 'SIGTERM');
+      },
+    });
+    controller.abort();
+
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('spawnProcess did not resolve after abort')), 2000);
+      }),
+    ]);
+
+    expect(killedCommands).toHaveLength(1);
+    expect(result.exitCode).toBeNull();
+  });
+
+  it('terminates immediately when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const killedCommands: string[] = [];
+
+    const resultPromise = spawnProcess({
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 30000)'],
+      cwd: process.cwd(),
+      shell: false,
+      signal: controller.signal,
+      killProcessTree: async (pid) => {
+        killedCommands.push(String(pid));
+        process.kill(pid, 'SIGTERM');
+      },
+    });
+
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('spawnProcess did not resolve for an already-aborted signal')), 2000);
+      }),
+    ]);
+
+    expect(killedCommands).toHaveLength(1);
+    expect(result.exitCode).toBeNull();
   });
 });

@@ -18,6 +18,7 @@ import type { CaseRow } from '../repositories/casesRepository.js';
 import type { EnvironmentRow } from '../repositories/environmentsRepository.js';
 import { createArtifactsRepository } from '../repositories/artifactsRepository.js';
 import { createRunsRepository } from '../repositories/runsRepository.js';
+import type { RunCancellationRegistry } from './runCancellation.js';
 
 export type ExecuteMidscene = (input: RunMidsceneYamlInput) => Promise<RunMidsceneYamlResult>;
 
@@ -25,6 +26,7 @@ export interface RunWorkerOptions {
   db: DatabaseConnection;
   artifactsDir: string;
   executeMidscene?: ExecuteMidscene;
+  cancellation?: RunCancellationRegistry;
 }
 
 export class RunWorker {
@@ -39,6 +41,7 @@ export class RunWorker {
   }
 
   async run(job: RunJob) {
+    const controller = this.options.cancellation?.register(job.runId) ?? new AbortController();
     try {
       const queuedRun = this.runs.findById(job.runId);
       if (!queuedRun) {
@@ -111,6 +114,7 @@ export class RunWorker {
           const execution = await this.executeMidscene({
             yamlPath: path.join(caseOutputDir, 'midscene.yaml'),
             outputDir: caseOutputDir,
+            signal: controller.signal,
           });
 
           writeTextArtifact(artifactDir, `${caseArtifactPath}/logs/stdout.log`, execution.stdout);
@@ -134,6 +138,18 @@ export class RunWorker {
             caseOutputDir,
             fallbackStatus: execution.status,
           });
+
+          if (execution.status === 'canceled') {
+            this.runs.updateRunCase(runCase.id, {
+              status: 'canceled',
+              errorMessage: 'Run canceled',
+              artifactPath: caseArtifactPath,
+            });
+            this.markRemainingCasesCanceled(runCases, index);
+            this.runs.updateStatus(job.runId, 'canceled');
+            emitRunEvent({ runId: job.runId, type: 'status', payload: { status: 'canceled' } });
+            return;
+          }
 
           if (execution.status === 'success') {
             this.runs.updateRunCase(runCase.id, { status: 'success', artifactPath: caseArtifactPath });
@@ -174,6 +190,43 @@ export class RunWorker {
 
       this.runs.updateStatus(job.runId, 'failed');
       emitRunEvent({ runId: job.runId, type: 'log', payload: { message: String(error) } });
+    } finally {
+      this.options.cancellation?.unregister(job.runId);
+    }
+  }
+
+  private markRemainingCasesCanceled(runCases: Array<{ id: string; test_case_id: string }>, currentCaseIndex: number) {
+    const now = new Date().toISOString();
+    const remainingCases = runCases.slice(currentCaseIndex + 1);
+    for (const remainingCase of remainingCases) {
+      this.runs.updateRunCase(remainingCase.id, {
+        status: 'canceled',
+        errorMessage: 'Run canceled',
+      });
+
+      const testCase = this.options.db
+        .prepare<[string], CaseRow>('SELECT * FROM test_cases WHERE id = ?')
+        .get(remainingCase.test_case_id);
+      if (testCase) {
+        const mappedTestCase = mapTestCase(testCase);
+        const enabledSteps = mappedTestCase.steps.filter((s) => s.enabled);
+        for (const [stepIndex, step] of enabledSteps.entries()) {
+          this.runs.createStep({
+            run_case_id: remainingCase.id,
+            step_id: step.id,
+            step_index: stepIndex,
+            step_title: step.title,
+            step_type: step.type,
+            status: 'canceled',
+            started_at: now,
+            finished_at: now,
+            duration_ms: 0,
+            error_message: 'Run canceled',
+            screenshot_path: null,
+            raw_result_json: JSON.stringify({ generated: true, status: 'canceled' }),
+          });
+        }
+      }
     }
   }
 
