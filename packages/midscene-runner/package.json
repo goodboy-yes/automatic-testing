@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@automatic-testing/shared": "workspace:*",
+    "@midscene/cli": "^1.8.7",
     "yaml": "^2.6.0"
   },
   "devDependencies": {
