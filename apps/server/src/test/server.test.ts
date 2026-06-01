@@ -85,6 +85,50 @@ describe('test asset API', () => {
     expect(listResponse.json()).toEqual([createResponse.json()]);
   });
 
+  it('fetches, updates, and deletes a project', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+    await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+
+    const getResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}` });
+    const updateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${project.id}`,
+      payload: { name: 'Web 回归', description: '更新后的项目' },
+    });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${project.id}` });
+    const missingResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}` });
+    const runsResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/runs` });
+    await app.close();
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({ id: project.id, name: 'Web 自动化' });
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toMatchObject({
+      id: project.id,
+      name: 'Web 回归',
+      description: '更新后的项目',
+    });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({ ok: true });
+    expect(missingResponse.statusCode).toBe(404);
+    expect(runsResponse.statusCode).toBe(200);
+    expect(runsResponse.json()).toEqual([]);
+  });
+
   it('creates and lists environments for a project', async () => {
     const { app, db } = await createTestApp();
     openConnections.push(db);

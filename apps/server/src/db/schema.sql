@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS test_runs (
   finished_at TEXT,
   duration_ms INTEGER,
   triggered_by TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS test_run_cases (
