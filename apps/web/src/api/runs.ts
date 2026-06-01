@@ -85,3 +85,13 @@ export function listRuns(projectId: string) {
 export function getRun(runId: string) {
   return apiGet<RunDetailResponse>(`/api/runs/${runId}`);
 }
+
+export function getRunArtifactUrl(runId: string, artifactPath: string) {
+  const encodedPath = artifactPath
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+
+  return `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodedPath}`;
+}

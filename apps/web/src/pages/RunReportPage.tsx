@@ -3,7 +3,7 @@ import { Alert, Card, Descriptions, Space, Table, Tabs, Tag, Typography } from '
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { getRun, type RunCaseRow, type RunRow, type RunStepRow } from '../api/runs';
+import { getRun, getRunArtifactUrl, type RunCaseRow, type RunRow, type RunStepRow } from '../api/runs';
 
 export function RunReportPage() {
   const { runId } = useParams();
@@ -13,6 +13,7 @@ export function RunReportPage() {
     enabled: Boolean(runId),
   });
   const run = runQuery.data?.run;
+  const runArtifactId = run?.id ?? runId ?? '';
   const caseByRunCaseId = useMemo(() => {
     const entries = runQuery.data?.cases?.map((runCase) => [runCase.id, runCase] as const) ?? [];
     return new Map(entries);
@@ -32,9 +33,13 @@ export function RunReportPage() {
         render: (value: number | null) => formatDuration(value),
       },
       { title: '错误信息', dataIndex: 'error_message', render: (value: string | null) => value ?? '-' },
-      { title: '产物路径', dataIndex: 'artifact_path', render: (value: string | null) => value ?? '-' },
+      {
+        title: '产物路径',
+        dataIndex: 'artifact_path',
+        render: (value: string | null) => renderCaseArtifactLink(runArtifactId, value),
+      },
     ],
-    [],
+    [runArtifactId],
   );
   const stepColumns = useMemo<ColumnsType<RunStepRow>>(
     () => [
@@ -57,9 +62,13 @@ export function RunReportPage() {
         render: (value: number | null) => formatDuration(value),
       },
       { title: '错误信息', dataIndex: 'error_message', render: (value: string | null) => value ?? '-' },
-      { title: '截图', dataIndex: 'screenshot_path', render: (value: string | null) => value ?? '-' },
+      {
+        title: '截图',
+        dataIndex: 'screenshot_path',
+        render: (value: string | null) => renderArtifactLink(runArtifactId, value, '查看截图'),
+      },
     ],
-    [caseByRunCaseId],
+    [caseByRunCaseId, runArtifactId],
   );
 
   return (
@@ -115,16 +124,56 @@ export function RunReportPage() {
             {
               key: 'logs',
               label: '日志',
-              children: (
-                <Typography.Text type="secondary">
-                  结构化日志和可视化报告入口将在执行器产物解析完成后展示。
-                </Typography.Text>
-              ),
+              children: renderRunArtifactLinks(runArtifactId),
             },
           ]}
         />
       </Card>
     </Space>
+  );
+}
+
+function renderRunArtifactLinks(runId: string) {
+  if (!runId) {
+    return <Typography.Text type="secondary">暂无产物</Typography.Text>;
+  }
+
+  return (
+    <Space size={12}>
+      <Typography.Link href={getRunArtifactUrl(runId, 'midscene.yaml')} target="_blank" rel="noreferrer">
+        运行 YAML
+      </Typography.Link>
+      <Typography.Link href={getRunArtifactUrl(runId, 'logs/run.log')} target="_blank" rel="noreferrer">
+        运行日志
+      </Typography.Link>
+    </Space>
+  );
+}
+
+function renderCaseArtifactLink(runId: string, artifactPath: string | null) {
+  if (!artifactPath || !runId) {
+    return '-';
+  }
+
+  return (
+    <Space size={8}>
+      <Typography.Text code>{artifactPath}</Typography.Text>
+      <Typography.Link href={getRunArtifactUrl(runId, `${artifactPath}/midscene.yaml`)} target="_blank" rel="noreferrer">
+        用例 YAML
+      </Typography.Link>
+    </Space>
+  );
+}
+
+function renderArtifactLink(runId: string, artifactPath: string | null, label: string) {
+  if (!artifactPath || !runId) {
+    return '-';
+  }
+
+  return (
+    <Typography.Link href={getRunArtifactUrl(runId, artifactPath)} target="_blank" rel="noreferrer">
+      {label}
+    </Typography.Link>
   );
 }
 

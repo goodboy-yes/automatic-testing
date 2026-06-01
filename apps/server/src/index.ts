@@ -8,6 +8,6 @@ const config = loadConfig();
 const db = openDatabase(config.databasePath);
 const worker = new RunWorker({ db, artifactsDir: config.artifactsDir });
 const runQueue = new RunQueue(worker, config.maxConcurrency);
-const app = await buildApp({ db, runQueue });
+const app = await buildApp({ db, runQueue, artifactsDir: config.artifactsDir });
 
 await app.listen({ host: config.host, port: config.port });

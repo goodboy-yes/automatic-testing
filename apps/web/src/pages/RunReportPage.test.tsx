@@ -7,6 +7,7 @@ import { RunReportPage } from './RunReportPage';
 
 vi.mock('../api/runs', () => ({
   getRun: vi.fn(),
+  getRunArtifactUrl: (runId: string, artifactPath: string) => `/api/runs/${runId}/artifacts/${artifactPath}`,
 }));
 
 const mockedGetRun = vi.mocked(getRun);
@@ -49,6 +50,25 @@ describe('RunReportPage', () => {
     expect(row.textContent).toContain('case_2');
     expect(screen.getByText('aiTap')).toBeTruthy();
     expect(screen.getByText('按钮不可见')).toBeTruthy();
+  });
+
+  it('renders links for run and case artifacts', async () => {
+    renderRunReportPage();
+
+    await screen.findByText('case_1');
+    const caseLinks = screen.getAllByRole('link', { name: '用例 YAML' });
+
+    expect(caseLinks?.[0]?.getAttribute('href')).toBe('/api/runs/run_1/artifacts/cases/run_case_1/midscene.yaml');
+    expect(caseLinks?.[1]?.getAttribute('href')).toBe('/api/runs/run_1/artifacts/cases/run_case_2/midscene.yaml');
+
+    fireEvent.click(screen.getByRole('tab', { name: '日志' }));
+
+    expect(screen.getByRole('link', { name: '运行 YAML' }).getAttribute('href')).toBe(
+      '/api/runs/run_1/artifacts/midscene.yaml',
+    );
+    expect(screen.getByRole('link', { name: '运行日志' }).getAttribute('href')).toBe(
+      '/api/runs/run_1/artifacts/logs/run.log',
+    );
   });
 });
 

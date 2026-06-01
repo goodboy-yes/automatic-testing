@@ -1,6 +1,8 @@
 import { createRunSchema } from '@automatic-testing/shared';
+import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { z } from 'zod';
+import { getArtifactContentType, resolveRunArtifactPath } from '../artifacts/artifacts.js';
 import type { DatabaseConnection } from '../db/database.js';
 import { runEvents } from '../events/runEvents.js';
 import type { RunQueuePort } from '../queue/runQueue.js';
@@ -10,7 +12,12 @@ import { parseRequestBody } from './validation.js';
 
 type CreateRunBody = z.infer<typeof createRunSchema>;
 
-export async function registerRunsRoutes(app: FastifyInstance, db: DatabaseConnection, queue: RunQueuePort) {
+export async function registerRunsRoutes(
+  app: FastifyInstance,
+  db: DatabaseConnection,
+  queue: RunQueuePort,
+  artifactsDir: string,
+) {
   const runs = createRunsRepository(db);
 
   app.post<{ Body: CreateRunBody }>('/api/runs', async (request, reply) => {
@@ -54,6 +61,31 @@ export async function registerRunsRoutes(app: FastifyInstance, db: DatabaseConne
       cases: runs.listCases(run.id),
       steps: runs.listSteps(run.id),
     };
+  });
+
+  app.get<{ Params: { runId: string; '*': string } }>('/api/runs/:runId/artifacts/*', async (request, reply) => {
+    const run = runs.findById(request.params.runId);
+    if (!run) {
+      return reply.code(404).send({ message: 'Run not found' });
+    }
+
+    const filePath = resolveRunArtifactPath(artifactsDir, run.id, request.params['*']);
+    if (!filePath) {
+      return reply.code(404).send({ message: 'Artifact not found' });
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return reply.code(404).send({ message: 'Artifact not found' });
+    }
+
+    if (!stat.isFile()) {
+      return reply.code(404).send({ message: 'Artifact not found' });
+    }
+
+    return reply.type(getArtifactContentType(filePath)).send(fs.createReadStream(filePath));
   });
 
   app.get<{ Params: { runId: string } }>('/api/runs/:runId/events', async (request, reply) => {

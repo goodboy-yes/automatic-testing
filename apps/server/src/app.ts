@@ -1,5 +1,6 @@
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
+import path from 'node:path';
 import type { DatabaseConnection } from './db/database.js';
 import type { RunQueuePort } from './queue/runQueue.js';
 import { registerCasesRoutes } from './routes/casesRoutes.js';
@@ -11,6 +12,7 @@ import { registerSuitesRoutes } from './routes/suitesRoutes.js';
 export interface BuildAppOptions {
   db: DatabaseConnection;
   runQueue?: RunQueuePort;
+  artifactsDir?: string;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -27,7 +29,12 @@ export async function buildApp(options: BuildAppOptions) {
   await registerEnvironmentsRoutes(app, options.db);
   await registerSuitesRoutes(app, options.db);
   await registerCasesRoutes(app, options.db);
-  await registerRunsRoutes(app, options.db, options.runQueue ?? { enqueue: () => undefined });
+  await registerRunsRoutes(
+    app,
+    options.db,
+    options.runQueue ?? { enqueue: () => undefined },
+    options.artifactsDir ?? path.resolve('artifacts'),
+  );
 
   return app;
 }

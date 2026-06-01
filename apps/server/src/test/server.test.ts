@@ -778,6 +778,71 @@ describe('run API and worker', () => {
     );
   });
 
+  it('serves run artifacts through a run-scoped endpoint', async () => {
+    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+    artifactPaths.push(artifactRoot);
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
+      JSON.stringify([
+        {
+          id: 'step_1',
+          type: 'navigate',
+          title: '打开登录页',
+          enabled: true,
+          params: { path: '/login' },
+        },
+      ]),
+      testCase.id,
+    );
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    const { RunWorker } = await import('../worker/runWorker.js');
+    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+
+    await worker.run({ runId: run.id });
+    const yamlResponse = await app.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}/artifacts/midscene.yaml`,
+    });
+    const logResponse = await app.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}/artifacts/logs/run.log`,
+    });
+    const traversalResponse = await app.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}/artifacts/..%2F..%2Fschema.sql`,
+    });
+    const missingRunResponse = await app.inject({
+      method: 'GET',
+      url: '/api/runs/missing-run/artifacts/midscene.yaml',
+    });
+    await app.close();
+
+    expect(yamlResponse.statusCode).toBe(200);
+    expect(yamlResponse.headers['content-type']).toContain('text/plain');
+    expect(yamlResponse.body).toContain('url: https://example.com/login');
+    expect(logResponse.statusCode).toBe(200);
+    expect(logResponse.body).toContain('Generated Midscene YAML');
+    expect(traversalResponse.statusCode).toBe(404);
+    expect(missingRunResponse.statusCode).toBe(404);
+  });
+
   it('stores case and step results when a suite run completes', async () => {
     const { app, db } = await createTestApp();
     openConnections.push(db);
@@ -904,7 +969,7 @@ interface EnqueuedRunJob {
   runId: string;
 }
 
-async function createTestApp() {
+async function createTestApp(options: { artifactsDir?: string } = {}) {
   const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
   databasePaths.push(databasePath);
   const db = openDatabase(databasePath);
@@ -914,7 +979,7 @@ async function createTestApp() {
       enqueuedJobs.push(job);
     },
   };
-  const app = await buildApp({ db, runQueue });
+  const app = await buildApp({ db, runQueue, artifactsDir: options.artifactsDir });
   return { app, db, enqueuedJobs };
 }
 
