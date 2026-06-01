@@ -53,6 +53,12 @@ export interface RunDetailResponse {
   steps: RunStepRow[];
 }
 
+export interface RunEvent {
+  runId: string;
+  type: 'status' | 'log';
+  payload: unknown;
+}
+
 export type CreateRunInput =
   | {
       projectId: string;
@@ -94,4 +100,43 @@ export function getRunArtifactUrl(runId: string, artifactPath: string) {
     .join('/');
 
   return `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodedPath}`;
+}
+
+export function subscribeRunEvents(runId: string, onEvent: (event: RunEvent) => void) {
+  const eventSource = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events`);
+  eventSource.onmessage = (message) => {
+    const event = parseRunEvent(message.data);
+    if (event) {
+      onEvent(event);
+    }
+  };
+
+  return () => eventSource.close();
+}
+
+function parseRunEvent(data: string): RunEvent | null {
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (!isRecord(parsed)) {
+      return null;
+    }
+
+    const runId = parsed.runId;
+    const type = parsed.type;
+    if (typeof runId !== 'string' || (type !== 'status' && type !== 'log')) {
+      return null;
+    }
+
+    return {
+      runId,
+      type,
+      payload: parsed.payload,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

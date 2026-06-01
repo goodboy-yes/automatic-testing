@@ -1,12 +1,27 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Card, Descriptions, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { getRun, getRunArtifactUrl, type RunCaseRow, type RunRow, type RunStepRow } from '../api/runs';
+import {
+  getRun,
+  getRunArtifactUrl,
+  subscribeRunEvents,
+  type RunCaseRow,
+  type RunEvent,
+  type RunRow,
+  type RunStepRow,
+} from '../api/runs';
+
+interface LiveLogEntry {
+  id: string;
+  message: string;
+}
 
 export function RunReportPage() {
   const { runId } = useParams();
+  const queryClient = useQueryClient();
+  const [liveLogs, setLiveLogs] = useState<LiveLogEntry[]>([]);
   const runQuery = useQuery({
     queryKey: ['run', runId],
     queryFn: () => getRun(runId ?? ''),
@@ -18,6 +33,30 @@ export function RunReportPage() {
     const entries = runQuery.data?.cases?.map((runCase) => [runCase.id, runCase] as const) ?? [];
     return new Map(entries);
   }, [runQuery.data?.cases]);
+  useEffect(() => {
+    if (!runId) {
+      return undefined;
+    }
+
+    return subscribeRunEvents(runId, (event) => {
+      if (event.type === 'status') {
+        void queryClient.invalidateQueries({ queryKey: ['run', runId] });
+      }
+
+      if (event.type === 'log') {
+        const message = getRunLogMessage(event);
+        if (message) {
+          setLiveLogs((currentLogs) => [
+            ...currentLogs,
+            {
+              id: `log_${currentLogs.length + 1}`,
+              message,
+            },
+          ]);
+        }
+      }
+    });
+  }, [queryClient, runId]);
 
   const caseColumns = useMemo<ColumnsType<RunCaseRow>>(
     () => [
@@ -124,11 +163,27 @@ export function RunReportPage() {
             {
               key: 'logs',
               label: '日志',
-              children: renderRunArtifactLinks(runArtifactId),
+              children: renderRunArtifactsAndLogs(runArtifactId, liveLogs),
             },
           ]}
         />
       </Card>
+    </Space>
+  );
+}
+
+function renderRunArtifactsAndLogs(runId: string, liveLogs: LiveLogEntry[]) {
+  return (
+    <Space orientation="vertical" size={12}>
+      {liveLogs.length > 0 ? (
+        <Space orientation="vertical" size={4}>
+          <Typography.Text strong>实时日志</Typography.Text>
+          {liveLogs.map((log) => (
+            <Typography.Text key={log.id}>{log.message}</Typography.Text>
+          ))}
+        </Space>
+      ) : null}
+      {renderRunArtifactLinks(runId)}
     </Space>
   );
 }
@@ -175,6 +230,19 @@ function renderArtifactLink(runId: string, artifactPath: string | null, label: s
       {label}
     </Typography.Link>
   );
+}
+
+function getRunLogMessage(event: RunEvent) {
+  if (!isRecord(event.payload)) {
+    return null;
+  }
+
+  const message = event.payload.message;
+  return typeof message === 'string' && message.length > 0 ? message : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function renderStatusTag(status: RunRow['status']) {

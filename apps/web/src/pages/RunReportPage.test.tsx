@@ -1,13 +1,34 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { getRun, type RunDetailResponse, type RunRow } from '../api/runs';
 import { RunReportPage } from './RunReportPage';
 
+interface RunEventForTest {
+  runId: string;
+  type: 'status' | 'log';
+  payload: {
+    message?: string;
+    status?: string;
+  };
+}
+
+const runEventMocks = vi.hoisted(() => {
+  const handlers: Array<(event: RunEventForTest) => void> = [];
+  const unsubscribe = vi.fn();
+  const subscribeRunEvents = vi.fn((runId: string, onEvent: (event: RunEventForTest) => void) => {
+    handlers.push(onEvent);
+    return unsubscribe;
+  });
+
+  return { handlers, subscribeRunEvents, unsubscribe };
+});
+
 vi.mock('../api/runs', () => ({
   getRun: vi.fn(),
   getRunArtifactUrl: (runId: string, artifactPath: string) => `/api/runs/${runId}/artifacts/${artifactPath}`,
+  subscribeRunEvents: runEventMocks.subscribeRunEvents,
 }));
 
 const mockedGetRun = vi.mocked(getRun);
@@ -15,6 +36,7 @@ const mockedGetRun = vi.mocked(getRun);
 describe('RunReportPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runEventMocks.handlers.length = 0;
     mockedGetRun.mockResolvedValue(createRunDetail());
   });
 
@@ -70,12 +92,57 @@ describe('RunReportPage', () => {
       '/api/runs/run_1/artifacts/logs/run.log',
     );
   });
+
+  it('refreshes run detail and shows live logs when run events arrive', async () => {
+    mockedGetRun
+      .mockResolvedValueOnce(
+        createRunDetail({
+          run: createRunRow({
+            status: 'running',
+            passed_cases: 0,
+            failed_cases: 0,
+            finished_at: null,
+            duration_ms: null,
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(createRunDetail());
+
+    renderRunReportPage();
+
+    await screen.findByText('运行中');
+    expect(runEventMocks.subscribeRunEvents).toHaveBeenCalledWith('run_1', expect.any(Function));
+
+    act(() => {
+      runEventMocks.handlers?.[0]?.({
+        runId: 'run_1',
+        type: 'log',
+        payload: { message: '开始执行登录用例' },
+      });
+    });
+    fireEvent.click(screen.getByRole('tab', { name: '日志' }));
+
+    expect(screen.getByText('开始执行登录用例')).toBeTruthy();
+
+    act(() => {
+      runEventMocks.handlers?.[0]?.({
+        runId: 'run_1',
+        type: 'status',
+        payload: { status: 'success' },
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockedGetRun).toHaveBeenCalledTimes(2);
+    });
+    expect((await screen.findAllByText('成功'))?.[0]).toBeTruthy();
+  });
 });
 
-function createRunDetail(): RunDetailResponse {
+function createRunDetail(overrides: Partial<RunDetailResponse> = {}): RunDetailResponse {
   return {
-    run: createRunRow(),
-    cases: [
+    run: overrides.run ?? createRunRow(),
+    cases: overrides.cases ?? [
       {
         id: 'run_case_1',
         run_id: 'run_1',
@@ -101,7 +168,7 @@ function createRunDetail(): RunDetailResponse {
         artifact_path: 'cases/run_case_2',
       },
     ],
-    steps: [
+    steps: overrides.steps ?? [
       {
         id: 'run_step_1',
         run_case_id: 'run_case_1',
