@@ -828,7 +828,13 @@ describe('run API and worker', () => {
     });
     const run = createResponse.json<RunResponse>();
     const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+    const worker = new RunWorker({
+      db,
+      artifactsDir: artifactRoot,
+      executeMidscene: async () => {
+        return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
+      },
+    });
 
     await worker.run({ runId: run.id });
     const completedRun = db.prepare<[string], RunResponse>('SELECT * FROM test_runs WHERE id = ?').get(run.id);
@@ -837,9 +843,6 @@ describe('run API and worker', () => {
     expect(completedRun?.status).toBe('success');
     expect(fs.readFileSync(path.join(artifactRoot, 'runs', run.id, 'midscene.yaml'), 'utf8')).toContain(
       'url: https://example.com/login',
-    );
-    expect(fs.readFileSync(path.join(artifactRoot, 'runs', run.id, 'logs', 'run.log'), 'utf8')).toContain(
-      'Generated Midscene YAML',
     );
   });
 
@@ -947,7 +950,13 @@ describe('run API and worker', () => {
     });
     const run = createResponse.json<RunResponse>();
     const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+    const worker = new RunWorker({
+      db,
+      artifactsDir: artifactRoot,
+      executeMidscene: async () => {
+        return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
+      },
+    });
 
     await worker.run({ runId: run.id });
     const yamlResponse = await app.inject({
@@ -975,6 +984,71 @@ describe('run API and worker', () => {
     expect(logResponse.body).toContain('Generated Midscene YAML');
     expect(traversalResponse.statusCode).toBe(404);
     expect(missingRunResponse.statusCode).toBe(404);
+  });
+
+  it('executes each run case through the runner and stores artifacts', async () => {
+    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+    artifactPaths.push(artifactRoot);
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
+      JSON.stringify([{ id: 'step_1', type: 'aiAssert', title: '检查首页', enabled: true, params: { prompt: '首页存在' } }]),
+      testCase.id,
+    );
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: { projectId: project.id, environmentId: environment.id, scopeType: 'case', scopeId: testCase.id },
+    });
+    const run = createResponse.json<RunResponse>();
+    const { RunWorker } = await import('../worker/runWorker.js');
+    const worker = new RunWorker({
+      db,
+      artifactsDir: artifactRoot,
+      executeMidscene: async ({ outputDir }) => {
+        fs.writeFileSync(path.join(outputDir, 'summary.json'), JSON.stringify({ pass: 1, fail: 0 }), 'utf8');
+        fs.writeFileSync(
+          path.join(outputDir, 'result-login.json'),
+          JSON.stringify({
+            tasks: [
+              {
+                title: '检查首页',
+                type: 'aiAssert',
+                status: 'failed',
+                error: '首页不存在',
+                screenshot: 'screenshots/step-1.png',
+              },
+            ],
+          }),
+          'utf8',
+        );
+        fs.writeFileSync(path.join(outputDir, 'visual-report.html'), '<html></html>', 'utf8');
+        return { status: 'failed', exitCode: 1, stdout: 'done', stderr: 'assert failed', summaryPath: 'summary.json' };
+      },
+    });
+
+    await worker.run({ runId: run.id });
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    const detail = detailResponse.json<RunDetailResponse>();
+    expect(detail.run.status).toBe('failed');
+    expect(detail.artifacts.map((a: { type: string }) => a.type)).toContain('visual_report');
+    expect(detail.artifacts.map((a: { type: string }) => a.type)).toContain('summary_json');
+    expect(detail.steps).toEqual([
+      expect.objectContaining({
+        step_title: '检查首页',
+        step_type: 'aiAssert',
+        status: 'failed',
+        error_message: '首页不存在',
+        screenshot_path: 'cases/' + detail.cases[0]?.id + '/screenshots/step-1.png',
+      }),
+    ]);
+    expect(detail.steps[0]?.raw_result_json).toContain('首页不存在');
   });
 
   it('stores case and step results when a suite run completes', async () => {
@@ -1022,7 +1096,13 @@ describe('run API and worker', () => {
     });
     const run = createResponse.json<RunResponse>();
     const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+    const worker = new RunWorker({
+      db,
+      artifactsDir: artifactRoot,
+      executeMidscene: async () => {
+        return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
+      },
+    });
 
     await worker.run({ runId: run.id });
     const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
