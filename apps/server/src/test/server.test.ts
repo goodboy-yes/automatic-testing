@@ -262,6 +262,46 @@ describe('test asset API', () => {
 
     expect(response.statusCode).toBe(404);
   });
+
+  it('previews generated Midscene YAML for a case and environment', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
+      JSON.stringify([
+        {
+          id: 'step_1',
+          type: 'navigate',
+          title: '打开登录页',
+          enabled: true,
+          params: { path: '/login' },
+        },
+        {
+          id: 'step_2',
+          type: 'aiTap',
+          title: '点击登录',
+          enabled: true,
+          params: { locate: '登录按钮' },
+        },
+      ]),
+      testCase.id,
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/cases/${testCase.id}/preview-midscene-yaml`,
+      payload: { environmentId: environment.id },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<PreviewYamlResponse>().yaml).toContain('url: https://example.com/login');
+    expect(response.json<PreviewYamlResponse>().yaml).toContain('aiTap: 登录按钮');
+  });
 });
 
 describe('run API and worker', () => {
@@ -384,6 +424,10 @@ interface RunResponse {
   scope_type: string;
   scope_id: string | null;
   status: string;
+}
+
+interface PreviewYamlResponse {
+  yaml: string;
 }
 
 interface EnqueuedRunJob {

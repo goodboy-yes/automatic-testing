@@ -1,6 +1,11 @@
+import Editor from '@monaco-editor/react';
 import { Card, Col, Row, Tabs, Typography } from 'antd';
+import { useCaseEditorStore } from '../stores/caseEditorStore';
 
 export function CaseEditorPage() {
+  const yamlText = useCaseEditorStore((state) => state.yamlText);
+  const setYamlText = useCaseEditorStore((state) => state.setYamlText);
+
   return (
     <>
       <Typography.Title level={3}>用例编辑器</Typography.Title>
@@ -13,7 +18,18 @@ export function CaseEditorPage() {
             <Tabs
               items={[
                 { key: 'flow', label: '步骤流', children: '步骤表单' },
-                { key: 'yaml', label: 'YAML 源码', children: '源码编辑器' },
+                {
+                  key: 'yaml',
+                  label: 'YAML 源码',
+                  children: (
+                    <Editor
+                      height="520px"
+                      defaultLanguage="yaml"
+                      value={yamlText}
+                      onChange={(value) => setYamlText(value ?? '')}
+                    />
+                  ),
+                },
               ]}
             />
           </Card>
