@@ -10,6 +10,10 @@ export interface SuiteRow {
   created_at: string;
   updated_at: string;
   case_count?: number;
+  run_count?: number;
+  last_run_status?: string | null;
+  last_run_at?: string | null;
+  pass_rate?: number | null;
 }
 
 export interface CreateSuiteInput {
@@ -34,9 +38,34 @@ export function createSuiteRepository(db: DatabaseConnection) {
       return db
         .prepare<[string], SuiteRow>(
           `SELECT test_suites.*,
-                  COUNT(test_cases.id) AS case_count
+                  COUNT(DISTINCT test_cases.id) AS case_count,
+                  COUNT(DISTINCT recent_runs.id) AS run_count,
+                  last_run.status AS last_run_status,
+                  last_run.created_at AS last_run_at,
+                  CASE
+                    WHEN total_runs.total > 0
+                    THEN ROUND(CAST(SUM(CASE WHEN recent_runs.status = 'success' THEN 1 ELSE 0 END) AS REAL) / CAST(total_runs.total AS REAL) * 100, 1)
+                    ELSE NULL
+                  END AS pass_rate
            FROM test_suites
            LEFT JOIN test_cases ON test_cases.suite_id = test_suites.id
+           LEFT JOIN test_runs AS recent_runs
+             ON recent_runs.scope_type = 'suite'
+             AND recent_runs.scope_id = test_suites.id
+             AND recent_runs.status IN ('success', 'failed', 'canceled')
+           LEFT JOIN test_runs AS last_run
+             ON last_run.id = (
+               SELECT r.id FROM test_runs r
+               WHERE r.scope_type = 'suite' AND r.scope_id = test_suites.id
+               AND r.status IN ('success', 'failed', 'canceled')
+               ORDER BY r.created_at DESC LIMIT 1
+             )
+           LEFT JOIN (
+             SELECT scope_id, COUNT(*) AS total
+             FROM test_runs
+             WHERE scope_type = 'suite' AND status IN ('success', 'failed', 'canceled')
+             GROUP BY scope_id
+           ) AS total_runs ON total_runs.scope_id = test_suites.id
            WHERE test_suites.project_id = ?
            GROUP BY test_suites.id
            ORDER BY test_suites.updated_at DESC`,

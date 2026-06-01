@@ -280,10 +280,11 @@ describe('test asset API', () => {
     });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toEqual([
-      {
+      expect.objectContaining({
         ...createResponse.json(),
         case_count: 0,
-      },
+        run_count: 0,
+      }),
     ]);
   });
 

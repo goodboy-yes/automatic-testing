@@ -113,6 +113,40 @@ export function SuiteListPage() {
       { title: '描述', dataIndex: 'description' },
       { title: '用例数', dataIndex: 'case_count', render: (value) => value ?? 0 },
       {
+        title: '运行次数',
+        dataIndex: 'run_count',
+        render: (value) => value ?? 0,
+      },
+      {
+        title: '通过率',
+        dataIndex: 'pass_rate',
+        render: (value: number | null) => {
+          if (value == null) {
+            return '-';
+          }
+          return `${value}%`;
+        },
+      },
+      {
+        title: '最近运行',
+        key: 'last_run',
+        render: (_value, record) => {
+          if (!record?.last_run_status) {
+            return '-';
+          }
+          return (
+            <Space size={4}>
+              <Tag color={record.last_run_status === 'success' ? 'success' : record.last_run_status === 'failed' ? 'error' : 'warning'}>
+                {record.last_run_status === 'success' ? '成功' : record.last_run_status === 'failed' ? '失败' : '已取消'}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {record.last_run_at ? record.last_run_at.slice(0, 16).replace('T', ' ') : ''}
+              </Typography.Text>
+            </Space>
+          );
+        },
+      },
+      {
         title: '状态',
         dataIndex: 'enabled',
         render: (enabled) => (enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),

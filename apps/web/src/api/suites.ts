@@ -7,6 +7,10 @@ export interface SuiteRow {
   description: string;
   enabled: number;
   case_count?: number;
+  run_count?: number;
+  last_run_status?: string | null;
+  last_run_at?: string | null;
+  pass_rate?: number | null;
   created_at?: string;
   updated_at?: string;
 }
