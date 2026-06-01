@@ -1,7 +1,11 @@
 import { PlusOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
 import { Button, Layout, Space, Table, Typography } from 'antd';
+import { listProjects } from '../api/projects';
 
 export function ProjectListPage() {
+  const { data = [], isLoading } = useQuery({ queryKey: ['projects'], queryFn: listProjects });
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Layout.Header style={{ color: '#fff', fontWeight: 600 }}>Midscene 自动化测试平台</Layout.Header>
@@ -16,13 +20,14 @@ export function ProjectListPage() {
             </Button>
           </Space>
           <Table
+            loading={isLoading}
             rowKey="id"
             columns={[
               { title: '项目名称', dataIndex: 'name' },
               { title: '描述', dataIndex: 'description' },
-              { title: '更新时间', dataIndex: 'updatedAt' },
+              { title: '更新时间', dataIndex: 'updated_at' },
             ]}
-            dataSource={[]}
+            dataSource={data}
           />
         </Space>
       </Layout.Content>
