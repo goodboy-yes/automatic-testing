@@ -166,6 +166,93 @@ describe('test asset API', () => {
     });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toEqual([createResponse.json()]);
+    expect(
+      db.prepare<[string], { default_environment_id: string | null }>(
+        'SELECT default_environment_id FROM projects WHERE id = ?',
+      ).get(project.id)?.default_environment_id,
+    ).toBe(createResponse.json<EnvironmentResponse>().id);
+  });
+
+  it('updates and deletes environments while keeping project default environment consistent', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const firstEnvironment = await createEnvironment(app, project.id);
+    const secondCreateResponse = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/environments`,
+      payload: {
+        name: '预发环境',
+        baseUrl: 'https://staging.example.com',
+        browserType: 'firefox',
+        viewportWidth: 1440,
+        viewportHeight: 900,
+        defaultTimeoutMs: 15000,
+        isDefault: false,
+      },
+    });
+    const secondEnvironment = secondCreateResponse.json<EnvironmentResponse>();
+
+    const updateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/environments/${secondEnvironment.id}`,
+      payload: {
+        name: '预发默认环境',
+        baseUrl: 'https://preview.example.com',
+        browserType: 'webkit',
+        viewportWidth: 1366,
+        viewportHeight: 768,
+        defaultTimeoutMs: 12000,
+        isDefault: true,
+      },
+    });
+    const listAfterUpdateResponse = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/environments`,
+    });
+    const defaultProjectAfterUpdate = db
+      .prepare<[string], { default_environment_id: string | null }>(
+        'SELECT default_environment_id FROM projects WHERE id = ?',
+      )
+      .get(project.id);
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: `/api/environments/${secondEnvironment.id}`,
+    });
+    const listAfterDeleteResponse = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/environments`,
+    });
+    await app.close();
+
+    expect(secondCreateResponse.statusCode).toBe(201);
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toMatchObject({
+      id: secondEnvironment.id,
+      name: '预发默认环境',
+      base_url: 'https://preview.example.com',
+      browser_type: 'webkit',
+      viewport_width: 1366,
+      viewport_height: 768,
+      default_timeout_ms: 12000,
+      is_default: 1,
+    });
+    expect(listAfterUpdateResponse.json<EnvironmentRowForTest[]>()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: firstEnvironment.id, is_default: 0 }),
+        expect.objectContaining({ id: secondEnvironment.id, is_default: 1 }),
+      ]),
+    );
+    expect(defaultProjectAfterUpdate?.default_environment_id).toBe(secondEnvironment.id);
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(listAfterDeleteResponse.json<EnvironmentRowForTest[]>()).toEqual([
+      expect.objectContaining({ id: firstEnvironment.id, is_default: 0 }),
+    ]);
+    expect(
+      db.prepare<[string], { default_environment_id: string | null }>(
+        'SELECT default_environment_id FROM projects WHERE id = ?',
+      ).get(project.id)?.default_environment_id,
+    ).toBeNull();
   });
 
   it('creates and lists suites for a project', async () => {
@@ -451,6 +538,11 @@ interface ProjectResponse {
 
 interface EnvironmentResponse {
   id: string;
+}
+
+interface EnvironmentRowForTest {
+  id: string;
+  is_default: number;
 }
 
 interface SuiteResponse {
