@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from './client';
+import type { Step } from '@automatic-testing/shared';
 
 export interface CaseRow {
   id: string;
@@ -18,9 +19,17 @@ export interface CreateCaseInput {
   description?: string;
 }
 
-export interface UpdateCaseInput extends CreateCaseInput {
-  enabled: boolean;
-  tags: string[];
+export interface UpdateCaseInput {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  tags?: string[];
+  steps?: Step[];
+}
+
+export interface PreviewCaseYamlInput {
+  environmentId: string;
+  steps?: Step[];
 }
 
 export function listCases(suiteId: string) {
@@ -37,6 +46,14 @@ export function createCase(suiteId: string, input: CreateCaseInput) {
 
 export function updateCase(caseId: string, input: UpdateCaseInput) {
   return apiPatch<CaseRow>(`/api/cases/${caseId}`, input);
+}
+
+export function updateCaseSteps(caseId: string, steps: Step[]) {
+  return updateCase(caseId, { steps });
+}
+
+export function previewCaseYaml(caseId: string, input: PreviewCaseYamlInput) {
+  return apiPost<{ yaml: string }>(`/api/cases/${caseId}/preview-midscene-yaml`, input);
 }
 
 export function deleteCase(caseId: string) {

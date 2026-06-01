@@ -1,5 +1,5 @@
 import { generateMidsceneYaml } from '@automatic-testing/midscene-runner';
-import type { Environment, TestCase } from '@automatic-testing/shared';
+import { stepSchema, type Environment, type Step, type TestCase } from '@automatic-testing/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { DatabaseConnection } from '../db/database.js';
@@ -27,12 +27,16 @@ const updateCaseBodySchema = z
     description: z.string().optional(),
     enabled: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
+    steps: z.array(stepSchema).optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
 
 const previewYamlBodySchema = z.object({
   environmentId: z.string().min(1),
+  steps: z.array(stepSchema).optional(),
 });
+
+type PreviewYamlBody = z.infer<typeof previewYamlBodySchema>;
 
 export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConnection) {
   const cases = createCaseRepository(db);
@@ -51,7 +55,7 @@ export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConn
     return testCase;
   });
 
-  app.post<{ Params: { caseId: string }; Body: { environmentId: string } }>(
+  app.post<{ Params: { caseId: string }; Body: PreviewYamlBody }>(
     '/api/cases/:caseId/preview-midscene-yaml',
     async (request, reply) => {
       const body = parseRequestBody(previewYamlBodySchema, request.body, reply);
@@ -71,10 +75,15 @@ export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConn
         return reply.code(404).send({ message: 'Environment not found' });
       }
 
+      const mappedTestCase = mapTestCase(testCaseRow);
+      const previewTestCase = body.steps
+        ? { ...mappedTestCase, steps: body.steps.map(normalizeStep) }
+        : mappedTestCase;
+
       return {
         yaml: generateMidsceneYaml({
           environment: mapEnvironment(environmentRow),
-          testCase: mapTestCase(testCaseRow),
+          testCase: previewTestCase,
         }),
       };
     },
@@ -146,5 +155,13 @@ function mapTestCase(testCase: CaseRow): TestCase {
     steps: JSON.parse(testCase.steps_json) as TestCase['steps'],
     createdAt: testCase.created_at,
     updatedAt: testCase.updated_at,
+  };
+}
+
+function normalizeStep(step: z.input<typeof stepSchema>): Step {
+  return {
+    ...step,
+    enabled: step.enabled ?? true,
+    params: step.params ?? {},
   };
 }

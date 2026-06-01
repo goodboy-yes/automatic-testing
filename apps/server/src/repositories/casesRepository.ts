@@ -26,6 +26,7 @@ export interface UpdateCaseInput {
   description?: string;
   enabled?: boolean;
   tags?: string[];
+  steps?: unknown[];
 }
 
 export function createCaseRepository(db: DatabaseConnection) {
@@ -89,6 +90,7 @@ export function createCaseRepository(db: DatabaseConnection) {
         description: input.description ?? testCase.description,
         enabled: input.enabled === undefined ? testCase.enabled : input.enabled ? 1 : 0,
         tags_json: input.tags ? JSON.stringify(input.tags) : testCase.tags_json,
+        steps_json: input.steps ? JSON.stringify(input.steps) : testCase.steps_json,
         updated_at: new Date().toISOString(),
       };
 
@@ -98,6 +100,7 @@ export function createCaseRepository(db: DatabaseConnection) {
              description = @description,
              enabled = @enabled,
              tags_json = @tags_json,
+             steps_json = @steps_json,
              updated_at = @updated_at
          WHERE id = @id`,
       ).run(updatedCase);
