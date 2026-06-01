@@ -279,7 +279,46 @@ describe('test asset API', () => {
       enabled: 1,
     });
     expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([createResponse.json()]);
+    expect(listResponse.json()).toEqual([
+      {
+        ...createResponse.json(),
+        case_count: 0,
+      },
+    ]);
+  });
+
+  it('fetches, updates, and deletes a suite with its cases', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    const getResponse = await app.inject({ method: 'GET', url: `/api/suites/${suite.id}` });
+    const updateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/suites/${suite.id}`,
+      payload: { name: '回归测试', description: '全量回归', enabled: false },
+    });
+    const listResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/suites` });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/suites/${suite.id}` });
+    const missingCaseResponse = await app.inject({ method: 'GET', url: `/api/cases/${testCase.id}` });
+    await app.close();
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({ id: suite.id, name: '冒烟测试' });
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toMatchObject({
+      id: suite.id,
+      name: '回归测试',
+      description: '全量回归',
+      enabled: 0,
+    });
+    expect(listResponse.json<SuiteRowForTest[]>()).toEqual([
+      expect.objectContaining({ id: suite.id, case_count: 1 }),
+    ]);
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(missingCaseResponse.statusCode).toBe(404);
   });
 
   it('creates, lists, and fetches cases for a suite', async () => {
@@ -317,6 +356,39 @@ describe('test asset API', () => {
     expect(listResponse.json()).toEqual([createResponse.json()]);
     expect(getResponse.statusCode).toBe(200);
     expect(getResponse.json()).toEqual(createResponse.json());
+  });
+
+  it('updates and deletes a case', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    const updateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/cases/${testCase.id}`,
+      payload: {
+        name: '登录失败提示',
+        description: '校验错误提示',
+        enabled: false,
+        tags: ['regression', 'login'],
+      },
+    });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/cases/${testCase.id}` });
+    const missingResponse = await app.inject({ method: 'GET', url: `/api/cases/${testCase.id}` });
+    await app.close();
+
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toMatchObject({
+      id: testCase.id,
+      name: '登录失败提示',
+      description: '校验错误提示',
+      enabled: 0,
+      tags_json: JSON.stringify(['regression', 'login']),
+    });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(missingResponse.statusCode).toBe(404);
   });
 
   it('returns 404 when fetching a missing case', async () => {
@@ -547,6 +619,11 @@ interface EnvironmentRowForTest {
 
 interface SuiteResponse {
   id: string;
+}
+
+interface SuiteRowForTest {
+  id: string;
+  case_count: number;
 }
 
 interface TestCaseResponse {

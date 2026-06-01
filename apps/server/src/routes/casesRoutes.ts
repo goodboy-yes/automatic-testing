@@ -3,17 +3,32 @@ import type { Environment, TestCase } from '@automatic-testing/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { DatabaseConnection } from '../db/database.js';
-import { createCaseRepository, type CaseRow, type CreateCaseInput } from '../repositories/casesRepository.js';
+import {
+  createCaseRepository,
+  type CaseRow,
+  type CreateCaseInput,
+  type UpdateCaseInput,
+} from '../repositories/casesRepository.js';
 import type { EnvironmentRow } from '../repositories/environmentsRepository.js';
 import { createSuiteRepository } from '../repositories/suitesRepository.js';
 import { parseRequestBody } from './validation.js';
 
 type CreateCaseBody = Omit<CreateCaseInput, 'projectId' | 'suiteId'>;
+type UpdateCaseBody = UpdateCaseInput;
 
 const createCaseBodySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
 });
+
+const updateCaseBodySchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    description: z.string().optional(),
+    enabled: z.boolean().optional(),
+    tags: z.array(z.string()).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0);
 
 const previewYamlBodySchema = z.object({
   environmentId: z.string().min(1),
@@ -77,6 +92,29 @@ export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConn
     }
 
     return reply.code(201).send(cases.create({ ...body, projectId: suite.project_id, suiteId: suite.id }));
+  });
+
+  app.patch<{ Params: { caseId: string }; Body: UpdateCaseBody }>('/api/cases/:caseId', async (request, reply) => {
+    const body = parseRequestBody(updateCaseBodySchema, request.body, reply);
+    if (!body) {
+      return reply;
+    }
+
+    const testCase = cases.update(request.params.caseId, body);
+    if (!testCase) {
+      return reply.code(404).send({ message: 'Test case not found' });
+    }
+
+    return testCase;
+  });
+
+  app.delete<{ Params: { caseId: string } }>('/api/cases/:caseId', async (request, reply) => {
+    const deleted = cases.delete(request.params.caseId);
+    if (!deleted) {
+      return reply.code(404).send({ message: 'Test case not found' });
+    }
+
+    return { ok: true };
   });
 }
 

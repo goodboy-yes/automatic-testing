@@ -21,6 +21,13 @@ export interface CreateCaseInput {
   description?: string;
 }
 
+export interface UpdateCaseInput {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  tags?: string[];
+}
+
 export function createCaseRepository(db: DatabaseConnection) {
   function findById(caseId: string): CaseRow | undefined {
     return db.prepare<[string], CaseRow>('SELECT * FROM test_cases WHERE id = ?').get(caseId);
@@ -68,6 +75,39 @@ export function createCaseRepository(db: DatabaseConnection) {
         caseId,
       );
       return findById(caseId);
+    },
+
+    update(caseId: string, input: UpdateCaseInput): CaseRow | undefined {
+      const testCase = findById(caseId);
+      if (!testCase) {
+        return undefined;
+      }
+
+      const updatedCase: CaseRow = {
+        ...testCase,
+        name: input.name ?? testCase.name,
+        description: input.description ?? testCase.description,
+        enabled: input.enabled === undefined ? testCase.enabled : input.enabled ? 1 : 0,
+        tags_json: input.tags ? JSON.stringify(input.tags) : testCase.tags_json,
+        updated_at: new Date().toISOString(),
+      };
+
+      db.prepare(
+        `UPDATE test_cases
+         SET name = @name,
+             description = @description,
+             enabled = @enabled,
+             tags_json = @tags_json,
+             updated_at = @updated_at
+         WHERE id = @id`,
+      ).run(updatedCase);
+
+      return findById(caseId);
+    },
+
+    delete(caseId: string): boolean {
+      const result = db.prepare<[string]>('DELETE FROM test_cases WHERE id = ?').run(caseId);
+      return result.changes > 0;
     },
   };
 }
