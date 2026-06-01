@@ -8,6 +8,7 @@ import {
   getRun,
   getRunArtifactUrl,
   subscribeRunEvents,
+  type RunArtifactRow,
   type RunCaseRow,
   type RunEvent,
   type RunRow,
@@ -179,7 +180,7 @@ export function RunReportPage() {
             {
               key: 'logs',
               label: '日志',
-              children: renderRunArtifactsAndLogs(runArtifactId, liveLogs),
+              children: renderRunArtifactsAndLogs(runArtifactId, runQuery.data?.artifacts ?? [], liveLogs),
             },
           ]}
         />
@@ -192,9 +193,9 @@ function isCancelableRun(status: RunRow['status']) {
   return status === 'pending' || status === 'running';
 }
 
-function renderRunArtifactsAndLogs(runId: string, liveLogs: LiveLogEntry[]) {
+function renderRunArtifactsAndLogs(runId: string, artifacts: RunArtifactRow[], liveLogs: LiveLogEntry[]) {
   return (
-    <Space orientation="vertical" size={12}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       {liveLogs.length > 0 ? (
         <Space orientation="vertical" size={4}>
           <Typography.Text strong>实时日志</Typography.Text>
@@ -203,26 +204,75 @@ function renderRunArtifactsAndLogs(runId: string, liveLogs: LiveLogEntry[]) {
           ))}
         </Space>
       ) : null}
-      {renderRunArtifactLinks(runId)}
+      {renderRunArtifactLinks(runId, artifacts)}
     </Space>
   );
 }
 
-function renderRunArtifactLinks(runId: string) {
-  if (!runId) {
+function renderRunArtifactLinks(runId: string, artifacts: RunArtifactRow[]) {
+  if (!runId || artifacts.length === 0) {
     return <Typography.Text type="secondary">暂无产物</Typography.Text>;
   }
 
+  const runLevelArtifacts = artifacts.filter((artifact) => !artifact.run_case_id);
+  const caseArtifacts = artifacts.filter((artifact) => Boolean(artifact.run_case_id));
+
   return (
-    <Space size={12}>
-      <Typography.Link href={getRunArtifactUrl(runId, 'midscene.yaml')} target="_blank" rel="noreferrer">
-        运行 YAML
-      </Typography.Link>
-      <Typography.Link href={getRunArtifactUrl(runId, 'logs/run.log')} target="_blank" rel="noreferrer">
-        运行日志
-      </Typography.Link>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+      {runLevelArtifacts.length > 0 ? (
+        <Space orientation="vertical" size={4}>
+          <Typography.Text strong>运行产物</Typography.Text>
+          <Space size={12} wrap>
+            {runLevelArtifacts.map((artifact) => (
+              <Typography.Link
+                key={artifact.id}
+                href={getRunArtifactUrl(runId, artifact.path)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {artifactTypeLabel(artifact.type, artifact.path)}
+              </Typography.Link>
+            ))}
+          </Space>
+        </Space>
+      ) : null}
+      {caseArtifacts.length > 0 ? (
+        <Space orientation="vertical" size={4}>
+          <Typography.Text strong>用例产物</Typography.Text>
+          <Table
+            size="small"
+            rowKey="id"
+            pagination={false}
+            dataSource={caseArtifacts}
+            columns={[
+              { title: '类型', dataIndex: 'type', render: (type: string) => artifactTypeLabel(type, '') },
+              { title: '路径', dataIndex: 'path', render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+              {
+                title: '操作',
+                render: (_, record) => (
+                  <Typography.Link href={getRunArtifactUrl(runId, record.path)} target="_blank" rel="noreferrer">
+                    查看
+                  </Typography.Link>
+                ),
+              },
+            ]}
+          />
+        </Space>
+      ) : null}
     </Space>
   );
+}
+
+function artifactTypeLabel(type: string, fallbackPath: string) {
+  const labels: Record<string, string> = {
+    midscene_yaml: 'Midscene YAML',
+    summary_json: '执行摘要',
+    result_json: '执行结果',
+    visual_report: '可视化报告',
+    screenshot: '截图',
+    log: '日志',
+  };
+  return labels[type] ?? fallbackPath ?? type;
 }
 
 function renderCaseArtifactLink(runId: string, artifactPath: string | null) {

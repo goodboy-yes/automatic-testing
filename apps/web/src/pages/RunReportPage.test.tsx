@@ -79,6 +79,16 @@ describe('RunReportPage', () => {
   });
 
   it('renders links for run and case artifacts', async () => {
+    mockedGetRun.mockResolvedValue(
+      createRunDetail({
+        artifacts: [
+          { id: 'a1', run_id: 'run_1', run_case_id: null, type: 'midscene_yaml', path: 'midscene.yaml', created_at: '2026-06-01T01:00:00.000Z' },
+          { id: 'a2', run_id: 'run_1', run_case_id: null, type: 'log', path: 'logs/run.log', created_at: '2026-06-01T01:00:00.000Z' },
+          { id: 'a3', run_id: 'run_1', run_case_id: 'run_case_1', type: 'midscene_yaml', path: 'cases/run_case_1/midscene.yaml', created_at: '2026-06-01T01:00:00.000Z' },
+          { id: 'a4', run_id: 'run_1', run_case_id: 'run_case_2', type: 'midscene_yaml', path: 'cases/run_case_2/midscene.yaml', created_at: '2026-06-01T01:00:00.000Z' },
+        ],
+      }),
+    );
     renderRunReportPage();
 
     await screen.findByText('case_1');
@@ -89,10 +99,11 @@ describe('RunReportPage', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: '日志' }));
 
-    expect(screen.getByRole('link', { name: '运行 YAML' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Midscene YAML' }).getAttribute('href')).toBe(
       '/api/runs/run_1/artifacts/midscene.yaml',
     );
-    expect(screen.getByRole('link', { name: '运行日志' }).getAttribute('href')).toBe(
+    const logLinks = screen.getAllByRole('link', { name: '日志' });
+    expect(logLinks?.[0]?.getAttribute('href')).toBe(
       '/api/runs/run_1/artifacts/logs/run.log',
     );
   });
