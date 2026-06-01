@@ -1,17 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Space, Table, Tag, Typography } from 'antd';
+import { Button, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { cancelRun, listRuns, type RunRow } from '../api/runs';
+
+const STATUS_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'pending', label: '排队中' },
+  { value: 'running', label: '运行中' },
+  { value: 'success', label: '成功' },
+  { value: 'failed', label: '失败' },
+  { value: 'canceled', label: '已取消' },
+];
+
+const SCOPE_OPTIONS = [
+  { value: '', label: '全部范围' },
+  { value: 'case', label: '用例' },
+  { value: 'suite', label: '套件' },
+  { value: 'selection', label: '选中用例' },
+];
 
 export function RunListPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [scopeTypeFilter, setScopeTypeFilter] = useState<string>('');
+
   const { data = [], isLoading } = useQuery({
-    queryKey: ['runs', projectId],
-    queryFn: () => listRuns(projectId ?? ''),
+    queryKey: ['runs', projectId, statusFilter, scopeTypeFilter],
+    queryFn: () =>
+      listRuns(projectId ?? '', {
+        status: statusFilter || undefined,
+        scopeType: scopeTypeFilter || undefined,
+      }),
     enabled: Boolean(projectId),
   });
   const cancelRunMutation = useMutation({
@@ -91,6 +114,20 @@ export function RunListPage() {
       <Typography.Title level={3} style={{ margin: 0 }}>
         执行记录
       </Typography.Title>
+      <Space size={12}>
+        <Select
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={STATUS_OPTIONS}
+          style={{ width: 140 }}
+        />
+        <Select
+          value={scopeTypeFilter}
+          onChange={setScopeTypeFilter}
+          options={SCOPE_OPTIONS}
+          style={{ width: 140 }}
+        />
+      </Space>
       <Table loading={isLoading} rowKey="id" columns={columns} dataSource={data} />
     </Space>
   );

@@ -119,10 +119,23 @@ export function createRunsRepository(db: DatabaseConnection) {
       return run;
     },
 
-    listByProject(projectId: string): RunRow[] {
+    listByProject(projectId: string, filters?: { status?: string; scopeType?: string }): RunRow[] {
+      const conditions = ['project_id = ?'];
+      const params: unknown[] = [projectId];
+
+      if (filters?.status) {
+        conditions.push('status = ?');
+        params.push(filters.status);
+      }
+      if (filters?.scopeType) {
+        conditions.push('scope_type = ?');
+        params.push(filters.scopeType);
+      }
+
+      const where = conditions.join(' AND ');
       return db
-        .prepare<[string], RunRow>('SELECT * FROM test_runs WHERE project_id = ? ORDER BY created_at DESC')
-        .all(projectId);
+        .prepare<unknown[], RunRow>(`SELECT * FROM test_runs WHERE ${where} ORDER BY created_at DESC`)
+        .all(...params);
     },
 
     findById,

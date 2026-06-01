@@ -50,8 +50,11 @@ export async function registerRunsRoutes(
     return reply.code(201).send(run);
   });
 
-  app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/runs', async (request) =>
-    runs.listByProject(request.params.projectId),
+  app.get<{ Params: { projectId: string }; Querystring: { status?: string; scopeType?: string } }>('/api/projects/:projectId/runs', async (request) =>
+    runs.listByProject(request.params.projectId, {
+      status: request.query.status,
+      scopeType: request.query.scopeType,
+    }),
   );
 
   app.get<{ Params: { runId: string } }>('/api/runs/:runId', async (request, reply) => {

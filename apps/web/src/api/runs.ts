@@ -94,8 +94,16 @@ export function createRun(input: CreateRunInput) {
   return apiPost<RunRow>('/api/runs', input);
 }
 
-export function listRuns(projectId: string) {
-  return apiGet<RunRow[]>(`/api/projects/${projectId}/runs`);
+export function listRuns(projectId: string, filters?: { status?: string; scopeType?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status) {
+    params.set('status', filters.status);
+  }
+  if (filters?.scopeType) {
+    params.set('scopeType', filters.scopeType);
+  }
+  const query = params.toString();
+  return apiGet<RunRow[]>(`/api/projects/${projectId}/runs${query ? `?${query}` : ''}`);
 }
 
 export function getRun(runId: string) {
