@@ -60,6 +60,10 @@ export function createRunsRepository(db: DatabaseConnection) {
     return db.prepare<[string], RunRow>('SELECT * FROM test_runs WHERE id = ?').get(runId);
   }
 
+  function isTerminalStatus(status: string) {
+    return status === 'success' || status === 'failed' || status === 'canceled';
+  }
+
   return {
     create(input: CreateRunInput): RunRow {
       const now = new Date().toISOString();
@@ -158,6 +162,42 @@ export function createRunsRepository(db: DatabaseConnection) {
 
       const durationMs = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
       db.prepare<[number, string]>('UPDATE test_runs SET duration_ms = ? WHERE id = ?').run(durationMs, runId);
+      return findById(runId);
+    },
+
+    cancel(runId: string): RunRow | undefined {
+      const run = findById(runId);
+      if (!run) {
+        return undefined;
+      }
+
+      if (isTerminalStatus(run.status)) {
+        return run;
+      }
+
+      const now = new Date().toISOString();
+      const startedAt = run.started_at ?? now;
+      const durationMs = new Date(now).getTime() - new Date(startedAt).getTime();
+      db.transaction(() => {
+        db.prepare<[string, string, number, string]>(
+          `UPDATE test_runs
+           SET status = 'canceled',
+               started_at = ?,
+               finished_at = ?,
+               duration_ms = ?
+           WHERE id = ?`,
+        ).run(startedAt, now, durationMs, runId);
+
+        db.prepare<[string, string, string]>(
+          `UPDATE test_run_cases
+           SET status = 'canceled',
+               started_at = COALESCE(started_at, ?),
+               finished_at = ?,
+               duration_ms = COALESCE(duration_ms, 0)
+           WHERE run_id = ? AND status IN ('pending', 'running')`,
+        ).run(now, now, runId);
+      })();
+
       return findById(runId);
     },
 

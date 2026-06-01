@@ -6,6 +6,7 @@ export interface RunJob {
 
 export interface RunQueuePort {
   enqueue(job: RunJob): void;
+  cancel?(runId: string): boolean;
 }
 
 export class RunQueue implements RunQueuePort {
@@ -20,6 +21,16 @@ export class RunQueue implements RunQueuePort {
   enqueue(job: RunJob) {
     this.jobs.push(job);
     void this.drain();
+  }
+
+  cancel(runId: string) {
+    const queuedIndex = this.jobs.findIndex((job) => job.runId === runId);
+    if (queuedIndex === -1) {
+      return false;
+    }
+
+    this.jobs.splice(queuedIndex, 1);
+    return true;
   }
 
   private async drain() {

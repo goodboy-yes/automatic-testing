@@ -92,6 +92,10 @@ export function getRun(runId: string) {
   return apiGet<RunDetailResponse>(`/api/runs/${runId}`);
 }
 
+export function cancelRun(runId: string) {
+  return apiPost<RunRow>(`/api/runs/${runId}/cancel`, {});
+}
+
 export function getRunArtifactUrl(runId: string, artifactPath: string) {
   const encodedPath = artifactPath
     .split(/[\\/]+/)

@@ -1,9 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Card, Descriptions, Space, Table, Tabs, Tag, Typography } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Descriptions, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
+  cancelRun,
   getRun,
   getRunArtifactUrl,
   subscribeRunEvents,
@@ -29,6 +30,12 @@ export function RunReportPage() {
   });
   const run = runQuery.data?.run;
   const runArtifactId = run?.id ?? runId ?? '';
+  const cancelRunMutation = useMutation({
+    mutationFn: (targetRunId: string) => cancelRun(targetRunId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['run', runId] });
+    },
+  });
   const caseByRunCaseId = useMemo(() => {
     const entries = runQuery.data?.cases?.map((runCase) => [runCase.id, runCase] as const) ?? [];
     return new Map(entries);
@@ -112,7 +119,16 @@ export function RunReportPage() {
 
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <Typography.Title level={3}>执行报告</Typography.Title>
+      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+        <Typography.Title level={3} style={{ margin: 0 }}>
+          执行报告
+        </Typography.Title>
+        {run && isCancelableRun(run.status) ? (
+          <Button danger loading={cancelRunMutation.isPending} onClick={() => cancelRunMutation.mutate(run.id)}>
+            取消运行
+          </Button>
+        ) : null}
+      </Space>
       {runQuery.isError ? <Alert type="error" title="执行报告加载失败" showIcon /> : null}
       <Card>
         <Descriptions
@@ -170,6 +186,10 @@ export function RunReportPage() {
       </Card>
     </Space>
   );
+}
+
+function isCancelableRun(status: RunRow['status']) {
+  return status === 'pending' || status === 'running';
 }
 
 function renderRunArtifactsAndLogs(runId: string, liveLogs: LiveLogEntry[]) {

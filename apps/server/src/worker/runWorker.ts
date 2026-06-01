@@ -21,10 +21,19 @@ export class RunWorker {
   }
 
   async run(job: RunJob) {
-    this.runs.updateStatus(job.runId, 'running');
-    emitRunEvent({ runId: job.runId, type: 'status', payload: { status: 'running' } });
-
     try {
+      const queuedRun = this.runs.findById(job.runId);
+      if (!queuedRun) {
+        throw new Error(`Run ${job.runId} not found`);
+      }
+      if (queuedRun.status === 'canceled') {
+        this.emitCanceled(job.runId);
+        return;
+      }
+
+      this.runs.updateStatus(job.runId, 'running');
+      emitRunEvent({ runId: job.runId, type: 'status', payload: { status: 'running' } });
+
       const run = this.runs.findById(job.runId);
       if (!run) {
         throw new Error(`Run ${job.runId} not found`);
@@ -50,6 +59,11 @@ export class RunWorker {
       let failedCases = 0;
 
       for (const [index, runCase] of runCases.entries()) {
+        if (this.isCanceled(job.runId)) {
+          this.emitCanceled(job.runId);
+          return;
+        }
+
         this.runs.updateRunCase(runCase.id, { status: 'running' });
 
         try {
@@ -104,15 +118,33 @@ export class RunWorker {
         }
       }
 
+      if (this.isCanceled(job.runId)) {
+        this.emitCanceled(job.runId);
+        return;
+      }
+
       writeTextArtifact(artifactDir, 'logs/run.log', 'Generated Midscene YAML and structured run results.');
 
       const status = failedCases > 0 ? 'failed' : 'success';
       this.runs.updateTotals(job.runId, { status, passedCases, failedCases });
       emitRunEvent({ runId: job.runId, type: 'status', payload: { status } });
     } catch (error) {
+      if (this.isCanceled(job.runId)) {
+        this.emitCanceled(job.runId);
+        return;
+      }
+
       this.runs.updateStatus(job.runId, 'failed');
       emitRunEvent({ runId: job.runId, type: 'log', payload: { message: String(error) } });
     }
+  }
+
+  private isCanceled(runId: string) {
+    return this.runs.findById(runId)?.status === 'canceled';
+  }
+
+  private emitCanceled(runId: string) {
+    emitRunEvent({ runId, type: 'status', payload: { status: 'canceled' } });
   }
 }
 

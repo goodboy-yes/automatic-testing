@@ -1,17 +1,24 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { listRuns, type RunRow } from '../api/runs';
+import { cancelRun, listRuns, type RunRow } from '../api/runs';
 
 export function RunListPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data = [], isLoading } = useQuery({
     queryKey: ['runs', projectId],
     queryFn: () => listRuns(projectId ?? ''),
     enabled: Boolean(projectId),
+  });
+  const cancelRunMutation = useMutation({
+    mutationFn: (runId: string) => cancelRun(runId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['runs', projectId] });
+    },
   });
 
   const columns = useMemo<ColumnsType<RunRow>>(
@@ -55,13 +62,28 @@ export function RunListPage() {
         title: '操作',
         key: 'actions',
         render: (_value, record) => (
-          <Button type="link" onClick={() => projectId && record?.id && navigate(`/projects/${projectId}/runs/${record.id}`)}>
-            查看报告
-          </Button>
+          <Space size={4}>
+            <Button
+              type="link"
+              onClick={() => projectId && record?.id && navigate(`/projects/${projectId}/runs/${record.id}`)}
+            >
+              查看报告
+            </Button>
+            {isCancelableRun(record.status) ? (
+              <Button
+                danger
+                loading={cancelRunMutation.isPending && cancelRunMutation.variables === record.id}
+                type="link"
+                onClick={() => record?.id && cancelRunMutation.mutate(record.id)}
+              >
+                取消运行
+              </Button>
+            ) : null}
+          </Space>
         ),
       },
     ],
-    [navigate, projectId],
+    [cancelRunMutation, navigate, projectId],
   );
 
   return (
@@ -72,6 +94,10 @@ export function RunListPage() {
       <Table loading={isLoading} rowKey="id" columns={columns} dataSource={data} />
     </Space>
   );
+}
+
+function isCancelableRun(status: RunRow['status']) {
+  return status === 'pending' || status === 'running';
 }
 
 function renderStatusTag(status: RunRow['status']) {

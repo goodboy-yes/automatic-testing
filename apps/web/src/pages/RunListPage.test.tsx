@@ -3,14 +3,16 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { listRuns, type RunRow } from '../api/runs';
+import { cancelRun, listRuns, type RunRow } from '../api/runs';
 import { RunListPage } from './RunListPage';
 
 vi.mock('../api/runs', () => ({
   listRuns: vi.fn(),
+  cancelRun: vi.fn(),
 }));
 
 const mockedListRuns = vi.mocked(listRuns);
+const mockedCancelRun = vi.mocked(cancelRun);
 const mockedNavigate = vi.hoisted(() => vi.fn());
 
 vi.mock('react-router-dom', async () => {
@@ -25,6 +27,7 @@ describe('RunListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListRuns.mockResolvedValue([]);
+    mockedCancelRun.mockResolvedValue(createRunRow({ status: 'canceled' }));
   });
 
   afterEach(() => {
@@ -68,6 +71,27 @@ describe('RunListPage', () => {
     await userEvent.click(within(row).getByRole('button', { name: '查看报告' }));
 
     expect(mockedNavigate).toHaveBeenCalledWith('/projects/project_1/runs/run_2');
+  });
+
+  it('cancels pending runs from the table action and refreshes the list', async () => {
+    mockedListRuns
+      .mockResolvedValueOnce([createRunRow({ id: 'run_3', status: 'pending' })])
+      .mockResolvedValueOnce([createRunRow({ id: 'run_3', status: 'canceled' })]);
+
+    renderRunListPage();
+
+    const status = await screen.findByText('排队中');
+    const row = status.closest('tr');
+    if (!row) {
+      throw new Error('Run row not found');
+    }
+
+    await userEvent.click(within(row).getByRole('button', { name: '取消运行' }));
+
+    expect(mockedCancelRun).toHaveBeenCalledWith('run_3');
+    await waitFor(() => {
+      expect(mockedListRuns).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

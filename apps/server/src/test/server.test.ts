@@ -621,6 +621,71 @@ describe('run API and worker', () => {
     expect(listResponse.json()).toEqual([run]);
   });
 
+  it('cancels a pending run and pending run cases', async () => {
+    const { app, db, enqueuedJobs, canceledRunIds } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    const cancelResponse = await app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel` });
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    expect(cancelResponse.statusCode).toBe(200);
+    expect(cancelResponse.json<RunResponse>().status).toBe('canceled');
+    expect(canceledRunIds).toEqual([run.id]);
+    expect(enqueuedJobs).toEqual([]);
+    expect(detailResponse.json<RunDetailResponse>().run.status).toBe('canceled');
+    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.status)).toEqual(['canceled']);
+  });
+
+  it('keeps a canceled run canceled when a worker receives the stale job', async () => {
+    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+    artifactPaths.push(artifactRoot);
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    await app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel` });
+    const { RunWorker } = await import('../worker/runWorker.js');
+    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+
+    await worker.run({ runId: run.id });
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    expect(detailResponse.json<RunDetailResponse>().run.status).toBe('canceled');
+    expect(detailResponse.json<RunDetailResponse>().steps).toEqual([]);
+    expect(fs.existsSync(path.join(artifactRoot, 'runs', run.id))).toBe(false);
+  });
+
   it('creates a suite run and expands it into run case records', async () => {
     const { app, db, enqueuedJobs } = await createTestApp();
     openConnections.push(db);
@@ -974,13 +1039,24 @@ async function createTestApp(options: { artifactsDir?: string } = {}) {
   databasePaths.push(databasePath);
   const db = openDatabase(databasePath);
   const enqueuedJobs: EnqueuedRunJob[] = [];
+  const canceledRunIds: string[] = [];
   const runQueue = {
     enqueue(job: EnqueuedRunJob) {
       enqueuedJobs.push(job);
     },
+    cancel(runId: string) {
+      canceledRunIds.push(runId);
+      const queuedIndex = enqueuedJobs.findIndex((job) => job.runId === runId);
+      if (queuedIndex === -1) {
+        return false;
+      }
+
+      enqueuedJobs.splice(queuedIndex, 1);
+      return true;
+    },
   };
   const app = await buildApp({ db, runQueue, artifactsDir: options.artifactsDir });
-  return { app, db, enqueuedJobs };
+  return { app, db, enqueuedJobs, canceledRunIds };
 }
 
 async function createProject(app: Awaited<ReturnType<typeof buildApp>>): Promise<ProjectResponse> {

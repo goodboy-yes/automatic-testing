@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { getRun, type RunDetailResponse, type RunRow } from '../api/runs';
+import { cancelRun, getRun, type RunDetailResponse, type RunRow } from '../api/runs';
 import { RunReportPage } from './RunReportPage';
 
 interface RunEventForTest {
@@ -26,17 +27,20 @@ const runEventMocks = vi.hoisted(() => {
 });
 
 vi.mock('../api/runs', () => ({
+  cancelRun: vi.fn(),
   getRun: vi.fn(),
   getRunArtifactUrl: (runId: string, artifactPath: string) => `/api/runs/${runId}/artifacts/${artifactPath}`,
   subscribeRunEvents: runEventMocks.subscribeRunEvents,
 }));
 
+const mockedCancelRun = vi.mocked(cancelRun);
 const mockedGetRun = vi.mocked(getRun);
 
 describe('RunReportPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runEventMocks.handlers.length = 0;
+    mockedCancelRun.mockResolvedValue(createRunRow({ status: 'canceled' }));
     mockedGetRun.mockResolvedValue(createRunDetail());
   });
 
@@ -136,6 +140,33 @@ describe('RunReportPage', () => {
       expect(mockedGetRun).toHaveBeenCalledTimes(2);
     });
     expect((await screen.findAllByText('成功'))?.[0]).toBeTruthy();
+  });
+
+  it('cancels a running run from the report page and refreshes detail', async () => {
+    mockedGetRun
+      .mockResolvedValueOnce(
+        createRunDetail({
+          run: createRunRow({
+            status: 'running',
+            passed_cases: 0,
+            failed_cases: 0,
+            finished_at: null,
+            duration_ms: null,
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(createRunDetail({ run: createRunRow({ status: 'canceled' }) }));
+
+    renderRunReportPage();
+
+    await screen.findByText('运行中');
+    await userEvent.click(screen.getByRole('button', { name: '取消运行' }));
+
+    expect(mockedCancelRun).toHaveBeenCalledWith('run_1');
+    await waitFor(() => {
+      expect(mockedGetRun).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText('已取消')).toBeTruthy();
   });
 });
 
