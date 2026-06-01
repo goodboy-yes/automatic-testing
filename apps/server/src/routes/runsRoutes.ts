@@ -7,6 +7,7 @@ import type { DatabaseConnection } from '../db/database.js';
 import { emitRunEvent, runEvents } from '../events/runEvents.js';
 import type { RunQueuePort } from '../queue/runQueue.js';
 import type { CaseRow } from '../repositories/casesRepository.js';
+import { createArtifactsRepository } from '../repositories/artifactsRepository.js';
 import { createRunsRepository } from '../repositories/runsRepository.js';
 import { parseRequestBody } from './validation.js';
 
@@ -19,6 +20,7 @@ export async function registerRunsRoutes(
   artifactsDir: string,
 ) {
   const runs = createRunsRepository(db);
+  const artifacts = createArtifactsRepository(db);
 
   app.post<{ Body: CreateRunBody }>('/api/runs', async (request, reply) => {
     const body = parseRequestBody(createRunSchema, request.body, reply);
@@ -60,6 +62,7 @@ export async function registerRunsRoutes(
       run,
       cases: runs.listCases(run.id),
       steps: runs.listSteps(run.id),
+      artifacts: artifacts.listByRun(run.id),
     };
   });
 

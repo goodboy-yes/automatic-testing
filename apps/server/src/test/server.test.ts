@@ -843,6 +843,75 @@ describe('run API and worker', () => {
     );
   });
 
+  it('returns persisted run artifacts in run detail', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+
+    db.prepare(
+      `INSERT INTO artifacts (id, run_id, run_case_id, type, path, created_at)
+       VALUES ('artifact_1', ?, NULL, 'visual_report', 'visual-report.html', '2026-06-01T00:00:00.000Z')`,
+    ).run(run.id);
+
+    const response = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<RunDetailResponse>().artifacts).toEqual([
+      {
+        id: 'artifact_1',
+        run_id: run.id,
+        run_case_id: null,
+        type: 'visual_report',
+        path: 'visual-report.html',
+        created_at: '2026-06-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('serves persisted artifact files through the run-scoped endpoint', async () => {
+    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+    artifactPaths.push(artifactRoot);
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: { projectId: project.id, environmentId: environment.id, scopeType: 'case', scopeId: testCase.id },
+    });
+    const run = createResponse.json<RunResponse>();
+    const reportDir = path.join(artifactRoot, 'runs', run.id);
+    fs.mkdirSync(reportDir, { recursive: true });
+    fs.writeFileSync(path.join(reportDir, 'visual-report.html'), '<html>report</html>', 'utf8');
+
+    const response = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/artifacts/visual-report.html` });
+    const traversalResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/artifacts/..%2Fschema.sql` });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('report');
+    expect(traversalResponse.statusCode).toBe(404);
+  });
+
   it('serves run artifacts through a run-scoped endpoint', async () => {
     const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
     artifactPaths.push(artifactRoot);
@@ -1027,6 +1096,14 @@ interface RunDetailResponse {
     run_case_id: string;
     step_id: string;
     status: string;
+  }>;
+  artifacts: Array<{
+    id: string;
+    run_id: string;
+    run_case_id: string | null;
+    type: string;
+    path: string;
+    created_at: string;
   }>;
 }
 

@@ -47,10 +47,20 @@ export interface RunStepRow {
   raw_result_json: string | null;
 }
 
+export interface RunArtifactRow {
+  id: string;
+  run_id: string;
+  run_case_id: string | null;
+  type: 'midscene_yaml' | 'summary_json' | 'result_json' | 'visual_report' | 'screenshot' | 'log';
+  path: string;
+  created_at: string;
+}
+
 export interface RunDetailResponse {
   run: RunRow;
   cases: RunCaseRow[];
   steps: RunStepRow[];
+  artifacts: RunArtifactRow[];
 }
 
 export interface RunEvent {

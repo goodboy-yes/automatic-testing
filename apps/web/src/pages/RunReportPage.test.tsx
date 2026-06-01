@@ -231,6 +231,7 @@ function createRunDetail(overrides: Partial<RunDetailResponse> = {}): RunDetailR
         raw_result_json: null,
       },
     ],
+    artifacts: overrides.artifacts ?? [],
   };
 }
 
