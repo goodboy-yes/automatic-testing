@@ -1,11 +1,13 @@
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Form, Input, Modal, Space, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Form, Input, Modal, Space, Switch, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useMemo, useState } from 'react';
 import type { Key } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { createCase, deleteCase, listCases, updateCase, type CaseRow } from '../api/cases';
+import { listEnvironments } from '../api/environments';
+import { createRun, type CreateRunInput } from '../api/runs';
 import { getSuite } from '../api/suites';
 
 interface CaseFormValues {
@@ -35,6 +37,15 @@ export function SuiteDetailPage() {
     queryFn: () => listCases(suiteId ?? ''),
     enabled: Boolean(suiteId),
   });
+  const { data: environments = [], isLoading: isEnvironmentsLoading } = useQuery({
+    queryKey: ['environments', projectId],
+    queryFn: () => listEnvironments(projectId ?? ''),
+    enabled: Boolean(projectId),
+  });
+  const defaultEnvironmentId = useMemo(
+    () => (environments.find((environment) => environment?.is_default)?.id ?? environments?.[0]?.id),
+    [environments],
+  );
 
   const createCaseMutation = useMutation({
     mutationFn: (values: { name: string; description?: string }) => createCase(suiteId ?? '', values),
@@ -59,6 +70,15 @@ export function SuiteDetailPage() {
     onSuccess: async (_result, deletedCaseId) => {
       setSelectedCaseIds((currentCaseIds) => currentCaseIds.filter((caseId) => caseId !== deletedCaseId));
       await queryClient.invalidateQueries({ queryKey: casesQueryKey });
+    },
+  });
+
+  const createRunMutation = useMutation({
+    mutationFn: (input: CreateRunInput) => createRun(input),
+    onSuccess: (run) => {
+      if (projectId && run?.id) {
+        navigate(`/projects/${projectId}/runs/${run.id}`);
+      }
     },
   });
 
@@ -181,6 +201,40 @@ export function SuiteDetailPage() {
       ?.map((tag) => tag.trim())
       ?.filter(Boolean) ?? [];
 
+  const runControlsDisabled =
+    !projectId || !suiteId || !defaultEnvironmentId || isEnvironmentsLoading || createRunMutation.isPending;
+
+  const handleRunSuite = () => {
+    if (!projectId || !suiteId || !defaultEnvironmentId) {
+      return;
+    }
+
+    createRunMutation.mutate({
+      projectId,
+      environmentId: defaultEnvironmentId,
+      scopeType: 'suite',
+      scopeId: suiteId,
+    });
+  };
+
+  const handleRunSelection = () => {
+    if (!projectId || !defaultEnvironmentId) {
+      return;
+    }
+
+    const caseIds = selectedCaseIds.filter((caseId): caseId is string => typeof caseId === 'string');
+    if (caseIds.length === 0) {
+      return;
+    }
+
+    createRunMutation.mutate({
+      projectId,
+      environmentId: defaultEnvironmentId,
+      scopeType: 'selection',
+      caseIds,
+    });
+  };
+
   const handleSaveCase = (values: CaseFormValues) => {
     const name = values?.name?.trim();
     if (!name) {
@@ -211,10 +265,20 @@ export function SuiteDetailPage() {
           {suite?.name ?? '套件详情'}
         </Typography.Title>
         <Space>
-          <Button icon={<PlayCircleOutlined />} disabled>
+          <Button
+            icon={<PlayCircleOutlined />}
+            disabled={runControlsDisabled}
+            loading={createRunMutation.isPending}
+            onClick={handleRunSuite}
+          >
             运行套件
           </Button>
-          <Button icon={<PlayCircleOutlined />} disabled={selectedCaseIds.length === 0}>
+          <Button
+            icon={<PlayCircleOutlined />}
+            disabled={runControlsDisabled || selectedCaseIds.length === 0}
+            loading={createRunMutation.isPending}
+            onClick={handleRunSelection}
+          >
             运行选中
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
@@ -222,6 +286,10 @@ export function SuiteDetailPage() {
           </Button>
         </Space>
       </Space>
+      {!isEnvironmentsLoading && environments.length === 0 ? (
+        <Alert type="warning" title="请先创建环境后再运行用例。" showIcon />
+      ) : null}
+      {createRunMutation.isError ? <Alert type="error" title="创建运行任务失败" showIcon /> : null}
       {selectedCaseIds.length > 0 ? <Typography.Text>已选择 {selectedCaseIds.length} 个用例</Typography.Text> : null}
       <Table
         loading={isLoading}

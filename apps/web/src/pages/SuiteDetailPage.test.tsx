@@ -11,6 +11,8 @@ import {
   updateCase,
   type CaseRow,
 } from '../api/cases';
+import { listEnvironments, type EnvironmentRow } from '../api/environments';
+import { createRun, type RunRow } from '../api/runs';
 import { getSuite, type SuiteRow } from '../api/suites';
 import { SuiteDetailPage } from './SuiteDetailPage';
 
@@ -25,8 +27,18 @@ vi.mock('../api/suites', () => ({
   getSuite: vi.fn(),
 }));
 
+vi.mock('../api/environments', () => ({
+  listEnvironments: vi.fn(),
+}));
+
+vi.mock('../api/runs', () => ({
+  createRun: vi.fn(),
+}));
+
 const mockedCreateCase = vi.mocked(createCase);
 const mockedDeleteCase = vi.mocked(deleteCase);
+const mockedCreateRun = vi.mocked(createRun);
+const mockedListEnvironments = vi.mocked(listEnvironments);
 const mockedGetSuite = vi.mocked(getSuite);
 const mockedListCases = vi.mocked(listCases);
 const mockedUpdateCase = vi.mocked(updateCase);
@@ -44,6 +56,7 @@ describe('SuiteDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetSuite.mockResolvedValue(createSuiteRow());
+    mockedListEnvironments.mockResolvedValue([createEnvironmentRow()]);
     mockedListCases.mockResolvedValue([]);
   });
 
@@ -217,6 +230,54 @@ describe('SuiteDetailPage', () => {
     expect(await screen.findByText('已选择 1 个用例')).toBeTruthy();
     expect(runSelectedButton).toHaveProperty('disabled', false);
   });
+
+  it('runs the whole suite with the default environment and opens its report', async () => {
+    mockedListCases.mockResolvedValue([createCaseRow({ name: '登录成功' })]);
+    mockedCreateRun.mockResolvedValue(createRunRow({ id: 'run_suite' }));
+
+    renderSuiteDetailPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /运行套件/ }));
+
+    await waitFor(() => {
+      expect(mockedCreateRun.mock.calls?.[0]?.[0]).toEqual({
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        scopeType: 'suite',
+        scopeId: 'suite_1',
+      });
+    });
+    expect(mockedNavigate).toHaveBeenCalledWith('/projects/project_1/runs/run_suite');
+  });
+
+  it('runs selected cases as a selection run and opens its report', async () => {
+    mockedListCases.mockResolvedValue([
+      createCaseRow({ id: 'case_1', name: '登录成功' }),
+      createCaseRow({ id: 'case_2', name: '登录失败' }),
+    ]);
+    mockedCreateRun.mockResolvedValue(createRunRow({ id: 'run_selection', scope_type: 'selection', scope_id: null }));
+
+    renderSuiteDetailPage();
+
+    const caseName = await screen.findByText('登录失败');
+    const row = caseName.closest('tr');
+    if (!row) {
+      throw new Error('Case row not found');
+    }
+
+    await userEvent.click(within(row).getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: /运行选中/ }));
+
+    await waitFor(() => {
+      expect(mockedCreateRun.mock.calls?.[0]?.[0]).toEqual({
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        scopeType: 'selection',
+        caseIds: ['case_2'],
+      });
+    });
+    expect(mockedNavigate).toHaveBeenCalledWith('/projects/project_1/runs/run_selection');
+  });
 });
 
 function createSuiteRow(overrides: Partial<SuiteRow> = {}): SuiteRow {
@@ -245,6 +306,43 @@ function createCaseRow(overrides: Partial<CaseRow> = {}): CaseRow {
     steps_json: JSON.stringify([]),
     created_at: '2026-06-01T00:00:00.000Z',
     updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createEnvironmentRow(overrides: Partial<EnvironmentRow> = {}): EnvironmentRow {
+  return {
+    id: 'env_1',
+    project_id: 'project_1',
+    name: '默认环境',
+    base_url: 'https://example.com',
+    browser_type: 'chromium',
+    viewport_width: 1280,
+    viewport_height: 720,
+    default_timeout_ms: 10000,
+    is_default: 1,
+    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createRunRow(overrides: Partial<RunRow> = {}): RunRow {
+  return {
+    id: 'run_1',
+    project_id: 'project_1',
+    environment_id: 'env_1',
+    scope_type: 'suite',
+    scope_id: 'suite_1',
+    status: 'pending',
+    total_cases: 1,
+    passed_cases: 0,
+    failed_cases: 0,
+    started_at: null,
+    finished_at: null,
+    duration_ms: null,
+    triggered_by: null,
+    created_at: '2026-06-01T00:00:00.000Z',
     ...overrides,
   };
 }

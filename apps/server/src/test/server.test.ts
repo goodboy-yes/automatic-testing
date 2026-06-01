@@ -621,6 +621,106 @@ describe('run API and worker', () => {
     expect(listResponse.json()).toEqual([run]);
   });
 
+  it('creates a suite run and expands it into run case records', async () => {
+    const { app, db, enqueuedJobs } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const firstCase = await createCase(app, suite.id);
+    const secondCase = await createCase(app, suite.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'suite',
+        scopeId: suite.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    const detailResponse = await app.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}`,
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(run).toMatchObject({
+      project_id: project.id,
+      environment_id: environment.id,
+      scope_type: 'suite',
+      scope_id: suite.id,
+      total_cases: 2,
+      status: 'pending',
+    });
+    expect(enqueuedJobs).toEqual([{ runId: run.id }]);
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.test_case_id)).toEqual([
+      firstCase.id,
+      secondCase.id,
+    ]);
+  });
+
+  it('rejects runs that use an environment from another project', async () => {
+    const { app, db, enqueuedJobs } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const otherProject = await createProject(app);
+    const otherEnvironment = await createEnvironment(app, otherProject.id);
+    const suite = await createSuite(app, project.id);
+    const testCase = await createCase(app, suite.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: otherEnvironment.id,
+        scopeType: 'case',
+        scopeId: testCase.id,
+      },
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(400);
+    expect(enqueuedJobs).toEqual([]);
+  });
+
+  it('keeps selection run cases in the requested order', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const firstCase = await createCase(app, suite.id);
+    const secondCase = await createCase(app, suite.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'selection',
+        caseIds: [secondCase.id, firstCase.id],
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    db.prepare<[string, string]>('UPDATE test_run_cases SET id = ? WHERE test_case_id = ?').run('z_second', secondCase.id);
+    db.prepare<[string, string]>('UPDATE test_run_cases SET id = ? WHERE test_case_id = ?').run('a_first', firstCase.id);
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.test_case_id)).toEqual([
+      secondCase.id,
+      firstCase.id,
+    ]);
+  });
+
   it('generates a Midscene YAML artifact and marks the run successful', async () => {
     const { app, db } = await createTestApp();
     openConnections.push(db);
@@ -677,6 +777,69 @@ describe('run API and worker', () => {
       'Generated Midscene YAML',
     );
   });
+
+  it('stores case and step results when a suite run completes', async () => {
+    const { app, db } = await createTestApp();
+    openConnections.push(db);
+    const project = await createProject(app);
+    const environment = await createEnvironment(app, project.id);
+    const suite = await createSuite(app, project.id);
+    const firstCase = await createCase(app, suite.id);
+    const secondCase = await createCase(app, suite.id);
+    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+    artifactPaths.push(artifactRoot);
+
+    for (const testCase of [firstCase, secondCase]) {
+      db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
+        JSON.stringify([
+          {
+            id: `${testCase.id}_step_1`,
+            type: 'navigate',
+            title: '打开登录页',
+            enabled: true,
+            params: { path: '/login' },
+          },
+          {
+            id: `${testCase.id}_step_2`,
+            type: 'aiAssert',
+            title: '检查首页',
+            enabled: true,
+            params: { prompt: '页面展示首页' },
+          },
+        ]),
+        testCase.id,
+      );
+    }
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        projectId: project.id,
+        environmentId: environment.id,
+        scopeType: 'suite',
+        scopeId: suite.id,
+      },
+    });
+    const run = createResponse.json<RunResponse>();
+    const { RunWorker } = await import('../worker/runWorker.js');
+    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
+
+    await worker.run({ runId: run.id });
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    await app.close();
+
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json<RunDetailResponse>().run).toMatchObject({
+      status: 'success',
+      total_cases: 2,
+      passed_cases: 2,
+      failed_cases: 0,
+    });
+    expect(detailResponse.json<RunDetailResponse>().cases).toHaveLength(2);
+    expect(detailResponse.json<RunDetailResponse>().steps).toHaveLength(4);
+    expect(detailResponse.json<RunDetailResponse>().steps.every((step) => step.status === 'success')).toBe(true);
+  });
 });
 
 interface ProjectResponse {
@@ -712,10 +875,29 @@ interface RunResponse {
   scope_type: string;
   scope_id: string | null;
   status: string;
+  total_cases: number;
+  passed_cases: number;
+  failed_cases: number;
 }
 
 interface PreviewYamlResponse {
   yaml: string;
+}
+
+interface RunDetailResponse {
+  run: RunResponse;
+  cases: Array<{
+    id: string;
+    test_case_id: string;
+    run_order: number;
+    status: string;
+  }>;
+  steps: Array<{
+    id: string;
+    run_case_id: string;
+    step_id: string;
+    status: string;
+  }>;
 }
 
 interface EnqueuedRunJob {

@@ -28,5 +28,15 @@ export function openDatabase(databasePath: string): DatabaseConnection {
   db.pragma('foreign_keys = ON');
   const schema = fs.readFileSync(resolveSchemaPath(), 'utf8');
   db.exec(schema);
+  ensureColumn(db, 'test_run_cases', 'run_order', 'INTEGER NOT NULL DEFAULT 0');
   return db;
+}
+
+function ensureColumn(db: DatabaseConnection, tableName: string, columnName: string, definition: string) {
+  const columns = db.pragma(`table_info(${tableName})`) as Array<{ name: string }>;
+  if (columns.some((column) => column?.name === columnName)) {
+    return;
+  }
+
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }

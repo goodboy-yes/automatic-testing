@@ -3,6 +3,7 @@ import {
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
   UpOutlined,
@@ -29,10 +30,11 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Step } from '@automatic-testing/shared';
 import { getCase, previewCaseYaml, updateCaseSteps, type CaseRow } from '../api/cases';
 import { listEnvironments, type EnvironmentRow } from '../api/environments';
+import { createRun, type CreateRunInput } from '../api/runs';
 import { useCaseEditorStore } from '../stores/caseEditorStore';
 import {
   createDefaultStep,
@@ -73,6 +75,7 @@ const stepTypeOptions: Array<{ label: string; value: EditorStepType }> = [
 
 export function CaseEditorPage() {
   const { projectId, caseId } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [stepForm] = Form.useForm<StepFormValues>();
   const selectedStepType = Form.useWatch('type', stepForm);
@@ -139,6 +142,15 @@ export function CaseEditorPage() {
     mutationFn: (input: { environmentId: string; steps: Step[] }) =>
       previewCaseYaml(caseId ?? '', input),
     onSuccess: (result) => setPreviewYaml(result?.yaml ?? ''),
+  });
+
+  const createRunMutation = useMutation({
+    mutationFn: (input: CreateRunInput) => createRun(input),
+    onSuccess: (run) => {
+      if (projectId && run?.id) {
+        navigate(`/projects/${projectId}/runs/${run.id}`);
+      }
+    },
   });
 
   const commitSteps = useCallback(
@@ -250,6 +262,19 @@ export function CaseEditorPage() {
     previewMutation.mutate({ environmentId: selectedEnvironmentId, steps });
   };
 
+  const handleRunCase = () => {
+    if (!projectId || !caseId || !selectedEnvironmentId) {
+      return;
+    }
+
+    createRunMutation.mutate({
+      projectId,
+      environmentId: selectedEnvironmentId,
+      scopeType: 'case',
+      scopeId: caseId,
+    });
+  };
+
   const columns = useMemo<ColumnsType<Step>>(
     () => [
       {
@@ -331,15 +356,27 @@ export function CaseEditorPage() {
           </Typography.Title>
           {dirty ? <Tag color="orange">未保存</Tag> : null}
         </Space>
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={saveStepsMutation.isPending}
-          onClick={() => saveStepsMutation.mutate(steps)}
-        >
-          保存用例
-        </Button>
+        <Space>
+          <Button
+            icon={<PlayCircleOutlined />}
+            disabled={!projectId || !caseId || !selectedEnvironmentId || dirty || createRunMutation.isPending}
+            loading={createRunMutation.isPending}
+            onClick={handleRunCase}
+          >
+            运行用例
+          </Button>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saveStepsMutation.isPending}
+            onClick={() => saveStepsMutation.mutate(steps)}
+          >
+            保存用例
+          </Button>
+        </Space>
       </Space>
+      {dirty ? <Alert type="info" title="请先保存用例，再运行最新步骤。" showIcon /> : null}
+      {createRunMutation.isError ? <Alert type="error" title="创建运行任务失败" showIcon /> : null}
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={7}>
           <Card
@@ -410,7 +447,7 @@ export function CaseEditorPage() {
               >
                 预览 YAML
               </Button>
-              {previewMutation.isError ? <Alert type="error" message="预览生成失败" /> : null}
+              {previewMutation.isError ? <Alert type="error" title="预览生成失败" /> : null}
               <Editor
                 height="420px"
                 defaultLanguage="yaml"
@@ -442,7 +479,7 @@ export function CaseEditorPage() {
           <Form.Item label="步骤超时(ms)" name="timeoutMs">
             <InputNumber min={1} precision={0} style={{ width: '100%' }} />
           </Form.Item>
-          {stepFormError ? <Alert type="error" message={stepFormError} style={{ marginBottom: 16 }} /> : null}
+          {stepFormError ? <Alert type="error" title={stepFormError} style={{ marginBottom: 16 }} /> : null}
           <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
             <Button onClick={closeStepModal}>取消</Button>
             <Button type="primary" htmlType="submit">

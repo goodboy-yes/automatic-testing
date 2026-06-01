@@ -29,9 +29,6 @@ export class RunWorker {
       if (!run) {
         throw new Error(`Run ${job.runId} not found`);
       }
-      if (run.scope_type !== 'case' || !run.scope_id) {
-        throw new Error(`Run ${job.runId} only supports case scope in the first vertical slice`);
-      }
 
       const environment = this.options.db
         .prepare<[string], EnvironmentRow>('SELECT * FROM environments WHERE id = ?')
@@ -39,25 +36,79 @@ export class RunWorker {
       if (!environment) {
         throw new Error(`Environment ${run.environment_id} not found`);
       }
+      if (environment.project_id !== run.project_id) {
+        throw new Error(`Environment ${run.environment_id} does not belong to project ${run.project_id}`);
+      }
 
-      const testCase = this.options.db
-        .prepare<[string], CaseRow>('SELECT * FROM test_cases WHERE id = ?')
-        .get(run.scope_id);
-      if (!testCase) {
-        throw new Error(`Test case ${run.scope_id} not found`);
+      const runCases = this.runs.listCases(run.id);
+      if (runCases.length === 0) {
+        throw new Error(`Run ${job.runId} has no runnable cases`);
       }
 
       const artifactDir = createRunArtifactDir(this.options.artifactsDir, job.runId);
-      const yaml = generateMidsceneYaml({
-        environment: mapEnvironment(environment),
-        testCase: mapTestCase(testCase),
-      });
+      let passedCases = 0;
+      let failedCases = 0;
 
-      writeTextArtifact(artifactDir, 'midscene.yaml', yaml);
-      writeTextArtifact(artifactDir, 'logs/run.log', 'Generated Midscene YAML for the first vertical slice.');
+      for (const [index, runCase] of runCases.entries()) {
+        this.runs.updateRunCase(runCase.id, { status: 'running' });
 
-      this.runs.updateStatus(job.runId, 'success');
-      emitRunEvent({ runId: job.runId, type: 'status', payload: { status: 'success' } });
+        try {
+          const testCase = this.options.db
+            .prepare<[string], CaseRow>('SELECT * FROM test_cases WHERE id = ?')
+            .get(runCase.test_case_id);
+          if (!testCase) {
+            throw new Error(`Test case ${runCase.test_case_id} not found`);
+          }
+
+          const mappedTestCase = mapTestCase(testCase);
+          const yaml = generateMidsceneYaml({
+            environment: mapEnvironment(environment),
+            testCase: mappedTestCase,
+          });
+          const caseArtifactPath = `cases/${runCase.id}`;
+
+          writeTextArtifact(artifactDir, `${caseArtifactPath}/midscene.yaml`, yaml);
+          if (index === 0) {
+            writeTextArtifact(artifactDir, 'midscene.yaml', yaml);
+          }
+
+          const now = new Date().toISOString();
+          mappedTestCase.steps
+            .filter((step) => step.enabled)
+            .forEach((step, stepIndex) => {
+              this.runs.createStep({
+                run_case_id: runCase.id,
+                step_id: step.id,
+                step_index: stepIndex,
+                step_title: step.title,
+                step_type: step.type,
+                status: 'success',
+                started_at: now,
+                finished_at: now,
+                duration_ms: 0,
+                error_message: null,
+                screenshot_path: null,
+                raw_result_json: JSON.stringify({ generated: true }),
+              });
+            });
+
+          this.runs.updateRunCase(runCase.id, { status: 'success', artifactPath: caseArtifactPath });
+          passedCases += 1;
+        } catch (error) {
+          failedCases += 1;
+          this.runs.updateRunCase(runCase.id, {
+            status: 'failed',
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+          emitRunEvent({ runId: job.runId, type: 'log', payload: { message: String(error) } });
+        }
+      }
+
+      writeTextArtifact(artifactDir, 'logs/run.log', 'Generated Midscene YAML and structured run results.');
+
+      const status = failedCases > 0 ? 'failed' : 'success';
+      this.runs.updateTotals(job.runId, { status, passedCases, failedCases });
+      emitRunEvent({ runId: job.runId, type: 'status', payload: { status } });
     } catch (error) {
       this.runs.updateStatus(job.runId, 'failed');
       emitRunEvent({ runId: job.runId, type: 'log', payload: { message: String(error) } });

@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import type { DatabaseConnection } from '../db/database.js';
 import { runEvents } from '../events/runEvents.js';
 import type { RunQueuePort } from '../queue/runQueue.js';
+import type { CaseRow } from '../repositories/casesRepository.js';
 import { createRunsRepository } from '../repositories/runsRepository.js';
 import { parseRequestBody } from './validation.js';
 
@@ -18,11 +19,21 @@ export async function registerRunsRoutes(app: FastifyInstance, db: DatabaseConne
       return reply;
     }
 
+    if (!environmentBelongsToProject(db, body.environmentId, body.projectId)) {
+      return reply.code(400).send({ message: 'Environment does not belong to project' });
+    }
+
+    const caseIds = resolveRunCaseIds(db, body);
+    if (caseIds.length === 0) {
+      return reply.code(400).send({ message: 'Run scope contains no runnable cases' });
+    }
+
     const run = runs.create({
       projectId: body.projectId,
       environmentId: body.environmentId,
       scopeType: body.scopeType,
       scopeId: body.scopeId,
+      caseIds,
     });
     queue.enqueue({ runId: run.id });
     return reply.code(201).send(run);
@@ -38,7 +49,11 @@ export async function registerRunsRoutes(app: FastifyInstance, db: DatabaseConne
       return reply.code(404).send({ message: 'Run not found' });
     }
 
-    return run;
+    return {
+      run,
+      cases: runs.listCases(run.id),
+      steps: runs.listSteps(run.id),
+    };
   });
 
   app.get<{ Params: { runId: string } }>('/api/runs/:runId/events', async (request, reply) => {
@@ -55,4 +70,41 @@ export async function registerRunsRoutes(app: FastifyInstance, db: DatabaseConne
     runEvents.on(request.params.runId, listener);
     request.raw.on('close', () => runEvents.off(request.params.runId, listener));
   });
+}
+
+function resolveRunCaseIds(db: DatabaseConnection, body: CreateRunBody): string[] {
+  if (body.scopeType === 'case') {
+    return findRunnableCaseById(db, body.scopeId, body.projectId) ? [body.scopeId] : [];
+  }
+
+  if (body.scopeType === 'suite') {
+    return db
+      .prepare<[string, string], Pick<CaseRow, 'id'>>(
+        `SELECT id
+         FROM test_cases
+         WHERE suite_id = ? AND project_id = ? AND enabled = 1
+         ORDER BY created_at ASC, id ASC`,
+      )
+      .all(body.scopeId, body.projectId)
+      .map((testCase) => testCase.id);
+  }
+
+  const uniqueCaseIds = Array.from(new Set(body.caseIds));
+  return uniqueCaseIds.filter((caseId) => Boolean(findRunnableCaseById(db, caseId, body.projectId)));
+}
+
+function findRunnableCaseById(db: DatabaseConnection, caseId: string, projectId: string): Pick<CaseRow, 'id'> | undefined {
+  return db
+    .prepare<[string, string], Pick<CaseRow, 'id'>>(
+      'SELECT id FROM test_cases WHERE id = ? AND project_id = ? AND enabled = 1',
+    )
+    .get(caseId, projectId);
+}
+
+function environmentBelongsToProject(db: DatabaseConnection, environmentId: string, projectId: string) {
+  return Boolean(
+    db
+      .prepare<[string, string], { id: string }>('SELECT id FROM environments WHERE id = ? AND project_id = ?')
+      .get(environmentId, projectId),
+  );
 }

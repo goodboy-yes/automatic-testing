@@ -9,6 +9,7 @@ import {
   type CaseRow,
 } from '../api/cases';
 import { listEnvironments, type EnvironmentRow } from '../api/environments';
+import { createRun, type RunRow } from '../api/runs';
 import { useCaseEditorStore } from '../stores/caseEditorStore';
 import { CaseEditorPage } from './CaseEditorPage';
 
@@ -42,7 +43,22 @@ vi.mock('../api/environments', () => ({
   listEnvironments: vi.fn(),
 }));
 
+vi.mock('../api/runs', () => ({
+  createRun: vi.fn(),
+}));
+
+const mockedNavigate = vi.hoisted(() => vi.fn());
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockedNavigate,
+  };
+});
+
 const mockedGetCase = vi.mocked(getCase);
+const mockedCreateRun = vi.mocked(createRun);
 const mockedListEnvironments = vi.mocked(listEnvironments);
 const mockedPreviewCaseYaml = vi.mocked(previewCaseYaml);
 const mockedUpdateCaseSteps = vi.mocked(updateCaseSteps);
@@ -54,6 +70,7 @@ describe('CaseEditorPage', () => {
     mockedGetCase.mockResolvedValue(createCaseRow());
     mockedListEnvironments.mockResolvedValue([createEnvironmentRow()]);
     mockedPreviewCaseYaml.mockResolvedValue({ yaml: 'web:\n  url: https://example.com/login\n' });
+    mockedCreateRun.mockResolvedValue(createRunRow());
     mockedUpdateCaseSteps.mockResolvedValue(createCaseRow());
   });
 
@@ -151,6 +168,37 @@ describe('CaseEditorPage', () => {
       expect(screen.queryAllByText('点击登录 副本')).toHaveLength(0);
     });
   });
+
+  it('runs the saved case with the selected environment and opens its report', async () => {
+    mockedCreateRun.mockResolvedValue(createRunRow({ id: 'run_case' }));
+    renderCaseEditorPage();
+
+    await screen.findByRole('heading', { name: '登录成功' });
+    clickButtonByText('运行用例');
+
+    await waitFor(() => {
+      expect(mockedCreateRun.mock.calls?.[0]?.[0]).toEqual({
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        scopeType: 'case',
+        scopeId: 'case_1',
+      });
+    });
+    expect(mockedNavigate).toHaveBeenCalledWith('/projects/project_1/runs/run_case');
+  });
+
+  it('disables case run while the case has unsaved step changes', async () => {
+    renderCaseEditorPage();
+
+    await screen.findByRole('heading', { name: '登录成功' });
+    act(() => {
+      useCaseEditorStore.getState()?.setYamlText('steps: []');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /运行用例/ })).toHaveProperty('disabled', true);
+    });
+  });
 });
 
 function createCaseRow(overrides: Partial<CaseRow> = {}): CaseRow {
@@ -197,6 +245,26 @@ function createEnvironmentRow(overrides: Partial<EnvironmentRow> = {}): Environm
     is_default: 1,
     created_at: '2026-06-01T00:00:00.000Z',
     updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createRunRow(overrides: Partial<RunRow> = {}): RunRow {
+  return {
+    id: 'run_1',
+    project_id: 'project_1',
+    environment_id: 'env_1',
+    scope_type: 'case',
+    scope_id: 'case_1',
+    status: 'pending',
+    total_cases: 1,
+    passed_cases: 0,
+    failed_cases: 0,
+    started_at: null,
+    finished_at: null,
+    duration_ms: null,
+    triggered_by: null,
+    created_at: '2026-06-01T00:00:00.000Z',
     ...overrides,
   };
 }

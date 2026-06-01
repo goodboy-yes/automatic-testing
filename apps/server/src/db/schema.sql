@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS test_run_cases (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
   test_case_id TEXT NOT NULL,
+  run_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT,
