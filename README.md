@@ -1,4 +1,4 @@
-# Midscene 自动化测试平台
+# Midscene 测试平台
 
 ## 本地启动
 
@@ -23,7 +23,8 @@ pnpm build
 
 - Vite + React + Ant Design v6 前端
 - Node.js 后端
-- 项目、环境、套件、用例管理
-- 平台 DSL 到 Midscene YAML 生成
-- 队列化运行任务
-- 报告产物目录
+- 测试用例列表和用例 YAML 编辑
+- 直接保存完整 Midscene 原生 YAML
+- 单用例队列化运行和取消
+- 运行状态展示
+- Midscene visual report、JSON、截图、日志等产物访问

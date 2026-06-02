@@ -1,107 +1,61 @@
-import {
-  CopyOutlined,
-  DeleteOutlined,
-  DownOutlined,
-  EditOutlined,
-  PlayCircleOutlined,
-  PlusOutlined,
-  SaveOutlined,
-  UpOutlined,
-} from '@ant-design/icons';
+import { ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons';
 import Editor from '@monaco-editor/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Alert,
-  Button,
-  Card,
-  Col,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Row,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tabs,
-  Tag,
-  Typography,
-} from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Button, Card, Descriptions, Form, Input, Space, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Step } from '@automatic-testing/shared';
-import { getCase, previewCaseYaml, updateCaseSteps, type CaseRow } from '../api/cases';
-import { listEnvironments, type EnvironmentRow } from '../api/environments';
-import { createRun, type CreateRunInput } from '../api/runs';
-import { useCaseEditorStore } from '../stores/caseEditorStore';
+import { getCase, updateCase } from '../api/cases';
 import {
-  createDefaultStep,
-  createStepCopy,
-  parseCaseDsl,
-  parseStoredSteps,
-  parseStoredTags,
-  serializeCaseDsl,
-  type EditorStepType,
-} from '../utils/caseDsl';
+  cancelRun,
+  createCaseRun,
+  getRun,
+  getRunArtifactUrl,
+  listCaseRuns,
+  subscribeRunEvents,
+  type RunArtifactRow,
+  type RunRow,
+  type RunStatus,
+} from '../api/runs';
 
-interface StepFormValues {
-  type?: EditorStepType;
-  title?: string;
-  enabled?: boolean;
-  path?: string;
-  locate?: string;
-  value?: string;
-  prompt?: string;
-  milliseconds?: number | null;
-  action?: string;
-  paramsJson?: string;
-  timeoutMs?: number | null;
+interface CaseFormValues {
+  name?: string;
+  description?: string;
 }
 
-const stepTypeOptions: Array<{ label: string; value: EditorStepType }> = [
-  { label: '打开页面', value: 'navigate' },
-  { label: '等待', value: 'wait' },
-  { label: 'AI 点击', value: 'aiTap' },
-  { label: 'AI 输入', value: 'aiInput' },
-  { label: 'AI 动作', value: 'aiAction' },
-  { label: 'AI Act', value: 'aiAct' },
-  { label: 'AI 断言', value: 'aiAssert' },
-  { label: 'AI 查询', value: 'aiQuery' },
-  { label: 'AI 等待条件', value: 'aiWaitFor' },
-  { label: '原生动作', value: 'native' },
-];
-
 export function CaseEditorPage() {
-  const { projectId, caseId } = useParams();
+  const { caseId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [stepForm] = Form.useForm<StepFormValues>();
-  const selectedStepType = Form.useWatch('type', stepForm);
-  const yamlText = useCaseEditorStore((state) => state.yamlText);
-  const dirty = useCaseEditorStore((state) => state.dirty);
-  const setYamlText = useCaseEditorStore((state) => state.setYamlText);
-  const resetYamlText = useCaseEditorStore((state) => state.resetYamlText);
-  const markSaved = useCaseEditorStore((state) => state.markSaved);
-  const [steps, setSteps] = useState<Step[]>([]);
-  const [editingStepId, setEditingStepId] = useState<string | null>(null);
-  const [isStepModalOpen, setIsStepModalOpen] = useState(false);
-  const [stepFormError, setStepFormError] = useState('');
-  const [yamlError, setYamlError] = useState('');
-  const [previewYaml, setPreviewYaml] = useState('');
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string>();
+  const [form] = Form.useForm<CaseFormValues>();
+  const [yamlText, setYamlText] = useState('');
+  const [dirty, setDirty] = useState(false);
 
   const caseQuery = useQuery({
     queryKey: ['case', caseId],
     queryFn: () => getCase(caseId ?? ''),
     enabled: Boolean(caseId),
   });
-  const { data: environments = [] } = useQuery({
-    queryKey: ['environments', projectId],
-    queryFn: () => listEnvironments(projectId ?? ''),
-    enabled: Boolean(projectId),
+
+  const runsQuery = useQuery({
+    queryKey: ['case-runs', caseId],
+    queryFn: () => listCaseRuns(caseId ?? ''),
+    enabled: Boolean(caseId),
+    refetchInterval: 2000,
   });
+
+  const latestRun = runsQuery.data?.[0];
+  const runDetailQuery = useQuery({
+    queryKey: ['run', latestRun?.id],
+    queryFn: () => getRun(latestRun?.id ?? ''),
+    enabled: Boolean(latestRun?.id),
+    refetchInterval: latestRun && isCancelableRun(latestRun.status) ? 2000 : false,
+  });
+  const runDetail = runDetailQuery.data;
+  const currentRun = runDetail?.run ?? latestRun;
+  const visualReport = useMemo(
+    () => runDetail?.artifacts?.find((artifact) => artifact?.type === 'visual_report'),
+    [runDetail?.artifacts],
+  );
 
   useEffect(() => {
     const testCase = caseQuery.data;
@@ -109,567 +63,228 @@ export function CaseEditorPage() {
       return;
     }
 
-    const parsedSteps = parseStoredSteps(testCase?.steps_json);
-    setSteps(parsedSteps);
-    resetYamlText(buildCaseDslText(testCase, parsedSteps));
-    setYamlError('');
-    setPreviewYaml('');
-  }, [caseQuery.data, resetYamlText]);
+    form.setFieldsValue({
+      name: testCase?.name,
+      description: testCase?.description,
+    });
+    setYamlText(testCase?.yaml_text ?? '');
+    setDirty(false);
+  }, [caseQuery.data, form]);
 
   useEffect(() => {
-    if (selectedEnvironmentId || environments.length === 0) {
-      return;
+    if (!currentRun?.id || !isCancelableRun(currentRun.status)) {
+      return undefined;
     }
 
-    const defaultEnvironment = environments.find((environment) => environment?.is_default) ?? environments?.[0];
-    if (defaultEnvironment?.id) {
-      setSelectedEnvironmentId(defaultEnvironment.id);
-    }
-  }, [environments, selectedEnvironmentId]);
+    return subscribeRunEvents(currentRun.id, () => {
+      void queryClient.invalidateQueries({ queryKey: ['case-runs', caseId] });
+      void queryClient.invalidateQueries({ queryKey: ['run', currentRun.id] });
+      void queryClient.invalidateQueries({ queryKey: ['cases'] });
+    });
+  }, [caseId, currentRun?.id, currentRun?.status, queryClient]);
 
-  const saveStepsMutation = useMutation({
-    mutationFn: (nextSteps: Step[]) => updateCaseSteps(caseId ?? '', nextSteps),
-    onSuccess: async (updatedCase) => {
-      const savedSteps = parseStoredSteps(updatedCase?.steps_json);
-      setSteps(savedSteps);
-      resetYamlText(buildCaseDslText(updatedCase, savedSteps));
-      markSaved();
+  const updateCaseMutation = useMutation({
+    mutationFn: (values: { name: string; description: string; yamlText: string }) =>
+      updateCase(caseId ?? '', values),
+    onSuccess: async (testCase) => {
+      form.setFieldsValue({
+        name: testCase?.name,
+        description: testCase?.description,
+      });
+      setYamlText(testCase?.yaml_text ?? '');
+      setDirty(false);
       await queryClient.invalidateQueries({ queryKey: ['case', caseId] });
+      await queryClient.invalidateQueries({ queryKey: ['cases'] });
     },
-  });
-
-  const previewMutation = useMutation({
-    mutationFn: (input: { environmentId: string; steps: Step[] }) =>
-      previewCaseYaml(caseId ?? '', input),
-    onSuccess: (result) => setPreviewYaml(result?.yaml ?? ''),
   });
 
   const createRunMutation = useMutation({
-    mutationFn: (input: CreateRunInput) => createRun(input),
-    onSuccess: (run) => {
-      if (projectId && run?.id) {
-        navigate(`/projects/${projectId}/runs/${run.id}`);
-      }
+    mutationFn: () => createCaseRun(caseId ?? ''),
+    onSuccess: async (run) => {
+      await queryClient.invalidateQueries({ queryKey: ['case-runs', caseId] });
+      await queryClient.invalidateQueries({ queryKey: ['run', run?.id] });
+      await queryClient.invalidateQueries({ queryKey: ['cases'] });
     },
   });
 
-  const commitSteps = useCallback(
-    (nextSteps: Step[]) => {
-      setSteps(nextSteps);
-      setYamlError('');
-      setPreviewYaml('');
-      setYamlText(buildCaseDslText(caseQuery.data, nextSteps));
+  const cancelRunMutation = useMutation({
+    mutationFn: (runId: string) => cancelRun(runId),
+    onSuccess: async (run) => {
+      await queryClient.invalidateQueries({ queryKey: ['case-runs', caseId] });
+      await queryClient.invalidateQueries({ queryKey: ['run', run?.id] });
+      await queryClient.invalidateQueries({ queryKey: ['cases'] });
     },
-    [caseQuery.data, setYamlText],
-  );
+  });
 
-  const openCreateStepModal = () => {
-    const defaultStep = createDefaultStep('aiTap');
-    setEditingStepId(null);
-    setStepFormError('');
-    stepForm.setFieldsValue(stepToFormValues(defaultStep));
-    setIsStepModalOpen(true);
-  };
-
-  const openEditStepModal = useCallback(
-    (step: Step) => {
-      setEditingStepId(step?.id);
-      setStepFormError('');
-      stepForm.setFieldsValue(stepToFormValues(step));
-      setIsStepModalOpen(true);
-    },
-    [stepForm],
-  );
-
-  const closeStepModal = useCallback(() => {
-    setIsStepModalOpen(false);
-    setEditingStepId(null);
-    setStepFormError('');
-    stepForm.resetFields();
-  }, [stepForm]);
-
-  const handleSaveStep = (values: StepFormValues) => {
-    try {
-      const nextStep = buildStepFromValues(values, steps.find((step) => step?.id === editingStepId));
-      const nextSteps = editingStepId
-        ? steps.map((step) => (step?.id === editingStepId ? nextStep : step))
-        : [...steps, nextStep];
-      commitSteps(nextSteps);
-      closeStepModal();
-    } catch (error) {
-      setStepFormError(error instanceof Error ? error.message : '步骤参数无效');
-    }
-  };
-
-  const toggleStepEnabled = useCallback(
-    (stepId: string, enabled: boolean) => {
-      commitSteps(steps.map((step) => (step?.id === stepId ? { ...step, enabled } : step)));
-    },
-    [commitSteps, steps],
-  );
-
-  const copyStep = useCallback(
-    (step: Step) => {
-      const sourceIndex = steps.findIndex((item) => item?.id === step?.id);
-      const nextSteps = [...steps];
-      nextSteps.splice(sourceIndex + 1, 0, createStepCopy(step));
-      commitSteps(nextSteps);
-    },
-    [commitSteps, steps],
-  );
-
-  const deleteStep = useCallback(
-    (stepId: string) => {
-      commitSteps(steps.filter((step) => step?.id !== stepId));
-    },
-    [commitSteps, steps],
-  );
-
-  const moveStep = useCallback(
-    (stepId: string, offset: -1 | 1) => {
-      const currentIndex = steps.findIndex((step) => step?.id === stepId);
-      const targetIndex = currentIndex + offset;
-      if (currentIndex < 0 || targetIndex < 0 || targetIndex >= steps.length) {
-        return;
-      }
-
-      const nextSteps = [...steps];
-      const [movedStep] = nextSteps.splice(currentIndex, 1);
-      if (!movedStep) {
-        return;
-      }
-      nextSteps.splice(targetIndex, 0, movedStep);
-      commitSteps(nextSteps);
-    },
-    [commitSteps, steps],
-  );
-
-  const handleApplyYaml = () => {
-    try {
-      const parsedSteps = parseCaseDsl(yamlText);
-      commitSteps(parsedSteps);
-      setYamlText(buildCaseDslText(caseQuery.data, parsedSteps));
-    } catch (error) {
-      setYamlError(error instanceof Error ? error.message : 'YAML 解析失败');
-    }
-  };
-
-  const handlePreviewYaml = () => {
-    if (!selectedEnvironmentId) {
+  const handleSave = async () => {
+    const values = await form.validateFields();
+    const name = values?.name?.trim();
+    if (!name) {
       return;
     }
 
-    previewMutation.mutate({ environmentId: selectedEnvironmentId, steps });
-  };
-
-  const handleRunCase = () => {
-    if (!projectId || !caseId || !selectedEnvironmentId) {
-      return;
-    }
-
-    createRunMutation.mutate({
-      projectId,
-      environmentId: selectedEnvironmentId,
-      scopeType: 'case',
-      scopeId: caseId,
+    updateCaseMutation.mutate({
+      name,
+      description: values?.description?.trim() ?? '',
+      yamlText,
     });
   };
 
-  const columns = useMemo<ColumnsType<Step>>(
-    () => [
-      {
-        title: '#',
-        key: 'index',
-        width: 56,
-        render: (_value, _record, index) => index + 1,
-      },
-      {
-        title: '步骤',
-        dataIndex: 'title',
-        render: (_value, record) => (
-          <Space>
-            <span>{record?.title}</span>
-            <Tag>{record?.type}</Tag>
-          </Space>
-        ),
-      },
-      {
-        title: '启用',
-        dataIndex: 'enabled',
-        width: 90,
-        render: (_value, record) => (
-          <Switch
-            aria-label="启用步骤"
-            checked={record?.enabled}
-            onChange={(checked) => toggleStepEnabled(record.id, checked)}
-          />
-        ),
-      },
-      {
-        title: '操作',
-        key: 'actions',
-        width: 320,
-        render: (_value, record, index) => (
-          <Space wrap>
-            <Button type="link" icon={<UpOutlined />} disabled={index === 0} onClick={() => moveStep(record.id, -1)}>
-              上移
-            </Button>
-            <Button
-              type="link"
-              icon={<DownOutlined />}
-              disabled={index === steps.length - 1}
-              onClick={() => moveStep(record.id, 1)}
-            >
-              下移
-            </Button>
-            <Button type="link" icon={<EditOutlined />} onClick={() => openEditStepModal(record)}>
-              编辑
-            </Button>
-            <Button type="link" icon={<CopyOutlined />} onClick={() => copyStep(record)}>
-              复制步骤
-            </Button>
-            <Button type="link" danger icon={<DeleteOutlined />} onClick={() => deleteStep(record.id)}>
-              删除步骤
-            </Button>
-          </Space>
-        ),
-      },
-    ],
-    [copyStep, deleteStep, moveStep, openEditStepModal, steps.length, toggleStepEnabled],
-  );
+  const handleYamlChange = (value?: string) => {
+    setYamlText(value ?? '');
+    setDirty(true);
+  };
 
-  const environmentOptions = useMemo(
-    () =>
-      environments.map((environment) => ({
-        label: environment?.is_default ? `${environment.name}（默认）` : environment.name,
-        value: environment.id,
-      })),
-    [environments],
-  );
+  const runButtonDisabled = !caseId || dirty || createRunMutation.isPending || updateCaseMutation.isPending;
+  const visualReportUrl =
+    currentRun?.id && visualReport?.path ? getRunArtifactUrl(currentRun.id, visualReport.path) : undefined;
 
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Space style={{ justifyContent: 'space-between', width: '100%' }}>
         <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/cases')}>
+            返回
+          </Button>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            {caseQuery.data?.name ?? '用例编辑器'}
+            {caseQuery.data?.name ?? '用例编辑'}
           </Typography.Title>
           {dirty ? <Tag color="orange">未保存</Tag> : null}
         </Space>
         <Space>
           <Button
+            aria-label="运行用例"
             icon={<PlayCircleOutlined />}
-            disabled={!projectId || !caseId || !selectedEnvironmentId || dirty || createRunMutation.isPending}
+            disabled={runButtonDisabled}
             loading={createRunMutation.isPending}
-            onClick={handleRunCase}
+            onClick={() => createRunMutation.mutate()}
           >
-            运行用例
+            运行
           </Button>
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            loading={saveStepsMutation.isPending}
-            onClick={() => saveStepsMutation.mutate(steps)}
-          >
-            保存用例
+          <Button type="primary" icon={<SaveOutlined />} loading={updateCaseMutation.isPending} onClick={handleSave}>
+            保存
           </Button>
         </Space>
       </Space>
-      {dirty ? <Alert type="info" title="请先保存用例，再运行最新步骤。" showIcon /> : null}
+      {dirty ? <Alert type="info" title="请先保存用例，再运行最新 YAML。" showIcon /> : null}
+      {caseQuery.isError ? <Alert type="error" title="用例加载失败" showIcon /> : null}
+      {updateCaseMutation.isError ? <Alert type="error" title="保存失败，请检查 YAML 格式。" showIcon /> : null}
       {createRunMutation.isError ? <Alert type="error" title="创建运行任务失败" showIcon /> : null}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={7}>
-          <Card
-            title="步骤列表"
-            extra={
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateStepModal}>
-                添加步骤
-              </Button>
-            }
-          >
-            <Table loading={caseQuery.isLoading} rowKey="id" size="small" columns={columns} dataSource={steps} />
-          </Card>
-        </Col>
-        <Col xs={24} xl={11}>
-          <Card>
-            <Tabs
-              items={[
-                {
-                  key: 'flow',
-                  label: '步骤流',
-                  children: (
-                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-                      <Typography.Text type="secondary">
-                        {steps.length > 0 ? `当前用例包含 ${steps.length} 个步骤` : '暂无步骤'}
-                      </Typography.Text>
-                      <Table rowKey="id" size="small" columns={columns} dataSource={steps} pagination={false} />
-                    </Space>
-                  ),
-                },
-                {
-                  key: 'yaml',
-                  label: 'YAML 源码',
-                  children: (
-                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-                      <Editor
-                        height="520px"
-                        defaultLanguage="yaml"
-                        value={yamlText}
-                        onChange={(value) => setYamlText(value ?? '')}
-                        options={{ minimap: { enabled: false } }}
-                      />
-                      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                        <Button onClick={handleApplyYaml}>应用 YAML</Button>
-                        {yamlError ? <Typography.Text type="danger">{yamlError}</Typography.Text> : null}
-                      </Space>
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} xl={6}>
-          <Card title="YAML 预览">
-            <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-              <Select
-                placeholder="选择环境"
-                value={selectedEnvironmentId}
-                options={environmentOptions}
-                onChange={setSelectedEnvironmentId}
-                style={{ width: '100%' }}
-              />
-              <Button
-                type="primary"
-                onClick={handlePreviewYaml}
-                loading={previewMutation.isPending}
-                disabled={!selectedEnvironmentId}
-              >
-                预览 YAML
-              </Button>
-              {previewMutation.isError ? <Alert type="error" title="预览生成失败" /> : null}
-              <Editor
-                height="420px"
-                defaultLanguage="yaml"
-                value={previewYaml}
-                options={{ readOnly: true, minimap: { enabled: false } }}
-              />
-            </Space>
-          </Card>
-        </Col>
-      </Row>
-      <Modal
-        title={editingStepId ? '编辑步骤' : '添加步骤'}
-        open={isStepModalOpen}
-        onCancel={closeStepModal}
-        footer={null}
-        destroyOnHidden
-      >
-        <Form form={stepForm} layout="vertical" onFinish={handleSaveStep}>
-          <Form.Item label="步骤类型" name="type" rules={[{ required: true, message: '请选择步骤类型' }]}>
-            <Select options={stepTypeOptions} />
-          </Form.Item>
-          <Form.Item label="步骤标题" name="title" rules={[{ required: true, message: '请输入步骤标题' }]}>
+      <Card>
+        <Form form={form} layout="vertical">
+          <Form.Item label="用例名称" name="name" rules={[{ required: true, message: '请输入用例名称' }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="启用步骤" name="enabled" valuePropName="checked">
-            <Switch />
+          <Form.Item label="描述" name="description">
+            <Input.TextArea rows={3} />
           </Form.Item>
-          {renderParamFields(selectedStepType)}
-          <Form.Item label="步骤超时(ms)" name="timeoutMs">
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+          <Form.Item label="Midscene YAML" required>
+            <Editor
+              height="520px"
+              defaultLanguage="yaml"
+              value={yamlText}
+              onChange={handleYamlChange}
+              options={{ minimap: { enabled: false } }}
+            />
           </Form.Item>
-          {stepFormError ? <Alert type="error" title={stepFormError} style={{ marginBottom: 16 }} /> : null}
-          <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
-            <Button onClick={closeStepModal}>取消</Button>
-            <Button type="primary" htmlType="submit">
-              确定
-            </Button>
-          </Space>
         </Form>
-      </Modal>
+      </Card>
+      <Card title="运行状态">
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          <Descriptions
+            bordered
+            items={[
+              { key: 'status', label: '状态', children: currentRun ? renderStatusTag(currentRun.status) : '-' },
+              { key: 'startedAt', label: '开始时间', children: formatDateTime(currentRun?.started_at) },
+              { key: 'finishedAt', label: '结束时间', children: formatDateTime(currentRun?.finished_at) },
+              { key: 'duration', label: '耗时', children: formatDuration(currentRun?.duration_ms) },
+              { key: 'exitCode', label: '退出码', children: currentRun?.exit_code ?? '-' },
+              { key: 'error', label: '错误信息', children: currentRun?.error_message ?? '-' },
+            ]}
+          />
+          <Space>
+            {currentRun && isCancelableRun(currentRun.status) ? (
+              <Button
+                danger
+                icon={<StopOutlined />}
+                loading={cancelRunMutation.isPending}
+                onClick={() => cancelRunMutation.mutate(currentRun.id)}
+              >
+                取消运行
+              </Button>
+            ) : null}
+            {visualReportUrl ? (
+              <Typography.Link href={visualReportUrl} target="_blank" rel="noreferrer">
+                查看 Midscene 报告
+              </Typography.Link>
+            ) : (
+              <Typography.Text type="secondary">{currentRun ? '暂无报告' : '暂无运行记录'}</Typography.Text>
+            )}
+            {renderArtifactLinks(currentRun, runDetail?.artifacts ?? [])}
+          </Space>
+        </Space>
+      </Card>
     </Space>
   );
 }
 
-function buildCaseDslText(testCase: CaseRow | undefined, steps: Step[]): string {
-  return serializeCaseDsl({
-    name: testCase?.name,
-    description: testCase?.description,
-    tags: parseStoredTags(testCase?.tags_json),
-    steps,
-  });
+function isCancelableRun(status: RunStatus) {
+  return status === 'pending' || status === 'running';
 }
 
-function renderParamFields(type: EditorStepType | undefined) {
-  if (type === 'navigate') {
-    return (
-      <Form.Item label="页面路径" name="path" rules={[{ required: true, message: '请输入页面路径' }]}>
-        <Input placeholder="/login" />
-      </Form.Item>
-    );
-  }
-
-  if (type === 'wait') {
-    return (
-      <Form.Item label="等待毫秒" name="milliseconds" rules={[{ required: true, message: '请输入等待时间' }]}>
-        <InputNumber min={1} precision={0} style={{ width: '100%' }} />
-      </Form.Item>
-    );
-  }
-
-  if (type === 'aiTap') {
-    return (
-      <Form.Item label="定位描述" name="locate" rules={[{ required: true, message: '请输入定位描述' }]}>
-        <Input />
-      </Form.Item>
-    );
-  }
-
-  if (type === 'aiInput') {
-    return (
-      <>
-        <Form.Item label="定位描述" name="locate" rules={[{ required: true, message: '请输入定位描述' }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item label="输入内容" name="value" rules={[{ required: true, message: '请输入输入内容' }]}>
-          <Input />
-        </Form.Item>
-      </>
-    );
-  }
-
-  if (type === 'native') {
-    return (
-      <>
-        <Form.Item label="动作名称" name="action" rules={[{ required: true, message: '请输入动作名称' }]}>
-          <Input placeholder="aiHover" />
-        </Form.Item>
-        <Form.Item label="参数 JSON" name="paramsJson">
-          <Input.TextArea rows={5} placeholder='{"locate":"用户头像"}' />
-        </Form.Item>
-      </>
-    );
-  }
-
-  return (
-    <Form.Item label="指令描述" name="prompt" rules={[{ required: true, message: '请输入指令描述' }]}>
-      <Input.TextArea rows={3} />
-    </Form.Item>
-  );
-}
-
-function stepToFormValues(step: Step): StepFormValues {
-  const type = step.type as EditorStepType;
-  const values: StepFormValues = {
-    type,
-    title: step.title,
-    enabled: step.enabled,
-    timeoutMs: step.timeoutMs,
+function renderStatusTag(status: RunStatus) {
+  const colorMap: Record<RunStatus, string> = {
+    pending: 'default',
+    running: 'processing',
+    success: 'success',
+    failed: 'error',
+    canceled: 'warning',
   };
 
-  if (type === 'navigate') {
-    values.path = stringParam(step.params, 'path') ?? '/';
-    return values;
-  }
-
-  if (type === 'wait') {
-    values.milliseconds = numberParam(step.params, 'milliseconds') ?? numberParam(step.params, 'ms') ?? 1000;
-    return values;
-  }
-
-  if (type === 'aiTap') {
-    values.locate = stringParam(step.params, 'locate') ?? '';
-    return values;
-  }
-
-  if (type === 'aiInput') {
-    values.locate = stringParam(step.params, 'locate') ?? '';
-    values.value = stringParam(step.params, 'value') ?? '';
-    return values;
-  }
-
-  if (type === 'native') {
-    values.action = stringParam(step.params, 'action') ?? '';
-    const { action: _action, ...rest } = step.params;
-    values.paramsJson = JSON.stringify(rest, null, 2);
-    return values;
-  }
-
-  values.prompt = stringParam(step.params, 'prompt') ?? '';
-  return values;
+  return <Tag color={colorMap[status]}>{statusLabel(status)}</Tag>;
 }
 
-function buildStepFromValues(values: StepFormValues, existingStep?: Step): Step {
-  const type = values.type ?? (existingStep?.type as EditorStepType | undefined) ?? 'aiTap';
-  const title = values.title?.trim();
-  if (!title) {
-    throw new Error('请输入步骤标题');
-  }
-
-  const baseStep = existingStep ?? createDefaultStep(type);
-  const timeoutMs = values.timeoutMs ?? undefined;
-  const step: Step = {
-    id: baseStep.id,
-    type,
-    title,
-    enabled: values.enabled ?? true,
-    params: buildParamsFromValues(type, values),
+function statusLabel(status: RunStatus) {
+  const labels: Record<RunStatus, string> = {
+    pending: '排队中',
+    running: '运行中',
+    success: '成功',
+    failed: '失败',
+    canceled: '已取消',
   };
-
-  if (timeoutMs) {
-    step.timeoutMs = timeoutMs;
-  }
-
-  return step;
+  return labels[status];
 }
 
-function buildParamsFromValues(type: EditorStepType, values: StepFormValues): Record<string, unknown> {
-  if (type === 'navigate') {
-    return { path: values.path?.trim() || '/' };
+function renderArtifactLinks(run: RunRow | undefined, artifacts: RunArtifactRow[]) {
+  if (!run?.id || artifacts.length === 0) {
+    return null;
   }
 
-  if (type === 'wait') {
-    return { milliseconds: values.milliseconds ?? 1000 };
-  }
-
-  if (type === 'aiTap') {
-    return { locate: values.locate?.trim() ?? '' };
-  }
-
-  if (type === 'aiInput') {
-    return { locate: values.locate?.trim() ?? '', value: values.value ?? '' };
-  }
-
-  if (type === 'native') {
-    return { ...parseParamsJson(values.paramsJson), action: values.action?.trim() ?? '' };
-  }
-
-  return { prompt: values.prompt?.trim() ?? '' };
+  return artifacts
+    .filter((artifact) => artifact?.type !== 'visual_report')
+    .map((artifact) => (
+      <Typography.Link key={artifact.id} href={getRunArtifactUrl(run.id, artifact.path)} target="_blank" rel="noreferrer">
+        {artifactTypeLabel(artifact.type)}
+      </Typography.Link>
+    ));
 }
 
-function parseParamsJson(paramsJson?: string): Record<string, unknown> {
-  if (!paramsJson?.trim()) {
-    return {};
-  }
-
-  const parsed: unknown = JSON.parse(paramsJson);
-  if (!isRecord(parsed)) {
-    throw new Error('参数 JSON 必须是对象');
-  }
-  return parsed;
+function artifactTypeLabel(type: RunArtifactRow['type']) {
+  const labels: Record<RunArtifactRow['type'], string> = {
+    midscene_yaml: 'YAML',
+    summary_json: '摘要',
+    result_json: '结果',
+    visual_report: '报告',
+    screenshot: '截图',
+    log: '日志',
+  };
+  return labels[type];
 }
 
-function stringParam(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params?.[key];
-  return typeof value === 'string' ? value : undefined;
+function formatDateTime(value: string | null | undefined) {
+  return value ? value.slice(0, 19).replace('T', ' ') : '-';
 }
 
-function numberParam(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params?.[key];
-  return typeof value === 'number' ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function formatDuration(value: number | null | undefined) {
+  return typeof value === 'number' ? `${value} ms` : '-';
 }

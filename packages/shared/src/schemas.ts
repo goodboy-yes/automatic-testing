@@ -1,85 +1,55 @@
 import { z } from 'zod';
 
-export const browserTypeSchema = z.enum(['chromium', 'firefox', 'webkit']);
-export const runStatusSchema = z.enum(['pending', 'running', 'success', 'failed', 'canceled']);
-export const runScopeTypeSchema = z.enum(['case', 'suite', 'selection']);
-
 export const idSchema = z.string().min(1);
-
-export const projectSchema = z.object({
-  id: idSchema,
-  name: z.string().min(1),
-  description: z.string().optional().default(''),
-  defaultEnvironmentId: z.string().nullable().default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const environmentSchema = z.object({
-  id: idSchema,
-  projectId: idSchema,
-  name: z.string().min(1),
-  baseUrl: z.string().url(),
-  browserType: browserTypeSchema,
-  viewportWidth: z.number().int().positive(),
-  viewportHeight: z.number().int().positive(),
-  defaultTimeoutMs: z.number().int().positive(),
-  isDefault: z.boolean(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const testSuiteSchema = z.object({
-  id: idSchema,
-  projectId: idSchema,
-  name: z.string().min(1),
-  description: z.string().optional().default(''),
-  enabled: z.boolean(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const stepSchema = z.object({
-  id: idSchema,
-  type: z.string().min(1),
-  title: z.string().min(1),
-  enabled: z.boolean().default(true),
-  params: z.record(z.unknown()).default({}),
-  timeoutMs: z.number().int().positive().optional(),
-});
+export const runStatusSchema = z.enum(['pending', 'running', 'success', 'failed', 'canceled']);
+export const artifactTypeSchema = z.enum([
+  'midscene_yaml',
+  'summary_json',
+  'result_json',
+  'visual_report',
+  'screenshot',
+  'log',
+]);
 
 export const testCaseSchema = z.object({
   id: idSchema,
-  projectId: idSchema,
-  suiteId: idSchema,
-  name: z.string().min(1),
-  description: z.string().optional().default(''),
-  enabled: z.boolean(),
-  tags: z.array(z.string()).default([]),
-  steps: z.array(stepSchema),
+  name: z.string().trim().min(1),
+  description: z.string().default(''),
+  yamlText: z.string().trim().min(1),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
-const createRunBaseSchema = z.object({
-  projectId: idSchema,
-  environmentId: idSchema,
+export const createCaseSchema = z.object({
+  name: z.string().trim().min(1),
+  description: z.string().optional().default(''),
+  yamlText: z.string().trim().min(1),
 });
 
-export const createRunSchema = z.discriminatedUnion('scopeType', [
-  createRunBaseSchema.extend({
-    scopeType: z.literal('case'),
-    scopeId: idSchema,
-    caseIds: z.array(idSchema).optional(),
-  }),
-  createRunBaseSchema.extend({
-    scopeType: z.literal('suite'),
-    scopeId: idSchema,
-    caseIds: z.array(idSchema).optional(),
-  }),
-  createRunBaseSchema.extend({
-    scopeType: z.literal('selection'),
-    scopeId: idSchema.optional(),
-    caseIds: z.array(idSchema).nonempty(),
-  }),
-]);
+export const updateCaseSchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    description: z.string().optional(),
+    yamlText: z.string().trim().min(1).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0);
+
+export const testRunSchema = z.object({
+  id: idSchema,
+  caseId: idSchema,
+  status: runStatusSchema,
+  exitCode: z.number().int().nullable(),
+  errorMessage: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  durationMs: z.number().int().nullable(),
+  createdAt: z.string(),
+});
+
+export const runArtifactSchema = z.object({
+  id: idSchema,
+  runId: idSchema,
+  type: artifactTypeSchema,
+  path: z.string().min(1),
+  createdAt: z.string(),
+});

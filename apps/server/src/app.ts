@@ -4,10 +4,7 @@ import path from 'node:path';
 import type { DatabaseConnection } from './db/database.js';
 import type { RunQueuePort } from './queue/runQueue.js';
 import { registerCasesRoutes } from './routes/casesRoutes.js';
-import { registerEnvironmentsRoutes } from './routes/environmentsRoutes.js';
-import { registerProjectsRoutes } from './routes/projectsRoutes.js';
 import { registerRunsRoutes } from './routes/runsRoutes.js';
-import { registerSuitesRoutes } from './routes/suitesRoutes.js';
 import type { RunCancellationRegistry } from './worker/runCancellation.js';
 
 export interface BuildAppOptions {
@@ -27,15 +24,15 @@ export async function buildApp(options: BuildAppOptions) {
     database: Boolean(options.db),
   }));
 
-  await registerProjectsRoutes(app, options.db);
-  await registerEnvironmentsRoutes(app, options.db);
-  await registerSuitesRoutes(app, options.db);
-  await registerCasesRoutes(app, options.db);
+  const artifactsDir = options.artifactsDir ?? path.resolve('artifacts');
+  const runQueue = options.runQueue ?? { enqueue: () => undefined };
+
+  await registerCasesRoutes(app, options.db, artifactsDir, runQueue, options.cancellation);
   await registerRunsRoutes(
     app,
     options.db,
-    options.runQueue ?? { enqueue: () => undefined },
-    options.artifactsDir ?? path.resolve('artifacts'),
+    runQueue,
+    artifactsDir,
     options.cancellation,
   );
 

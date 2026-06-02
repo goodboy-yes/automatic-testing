@@ -1,50 +1,52 @@
-import { generateMidsceneYaml } from '@automatic-testing/midscene-runner';
-import { stepSchema, type Environment, type Step, type TestCase } from '@automatic-testing/shared';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import fs from 'node:fs';
+import path from 'node:path';
+import YAML from 'yaml';
 import { z } from 'zod';
 import type { DatabaseConnection } from '../db/database.js';
-import {
-  createCaseRepository,
-  type CaseRow,
-  type CreateCaseInput,
-  type UpdateCaseInput,
-} from '../repositories/casesRepository.js';
-import type { EnvironmentRow } from '../repositories/environmentsRepository.js';
-import { createSuiteRepository } from '../repositories/suitesRepository.js';
+import type { RunQueuePort } from '../queue/runQueue.js';
+import { createCaseRepository, type CreateCaseInput, type UpdateCaseInput } from '../repositories/casesRepository.js';
+import { createRunsRepository } from '../repositories/runsRepository.js';
+import type { RunCancellationRegistry } from '../worker/runCancellation.js';
 import { parseRequestBody } from './validation.js';
 
-type CreateCaseBody = Omit<CreateCaseInput, 'projectId' | 'suiteId'>;
+type CreateCaseBody = CreateCaseInput;
 type UpdateCaseBody = UpdateCaseInput;
 
 const createCaseBodySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  yamlText: z.string().min(1),
 });
 
 const updateCaseBodySchema = z
   .object({
     name: z.string().min(1).optional(),
     description: z.string().optional(),
-    enabled: z.boolean().optional(),
-    tags: z.array(z.string()).optional(),
-    steps: z.array(stepSchema).optional(),
+    yamlText: z.string().min(1).optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
 
-const previewYamlBodySchema = z.object({
-  environmentId: z.string().min(1),
-  steps: z.array(stepSchema).optional(),
-});
-
-type PreviewYamlBody = z.infer<typeof previewYamlBodySchema>;
-
-export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConnection) {
+export async function registerCasesRoutes(
+  app: FastifyInstance,
+  db: DatabaseConnection,
+  artifactsDir: string,
+  queue?: RunQueuePort,
+  cancellation?: RunCancellationRegistry,
+) {
   const cases = createCaseRepository(db);
-  const suites = createSuiteRepository(db);
+  const runs = createRunsRepository(db);
 
-  app.get<{ Params: { suiteId: string } }>('/api/suites/:suiteId/cases', async (request) =>
-    cases.listBySuite(request.params.suiteId),
-  );
+  app.get('/api/cases', async () => cases.list());
+
+  app.post<{ Body: CreateCaseBody }>('/api/cases', async (request, reply) => {
+    const body = parseRequestBody(createCaseBodySchema, request.body, reply);
+    if (!body || !validateYamlText(body.yamlText, reply)) {
+      return reply;
+    }
+
+    return reply.code(201).send(cases.create(normalizeCaseInput(body)));
+  });
 
   app.get<{ Params: { caseId: string } }>('/api/cases/:caseId', async (request, reply) => {
     const testCase = cases.findById(request.params.caseId);
@@ -55,61 +57,16 @@ export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConn
     return testCase;
   });
 
-  app.post<{ Params: { caseId: string }; Body: PreviewYamlBody }>(
-    '/api/cases/:caseId/preview-midscene-yaml',
-    async (request, reply) => {
-      const body = parseRequestBody(previewYamlBodySchema, request.body, reply);
-      if (!body) {
-        return reply;
-      }
-
-      const testCaseRow = cases.findById(request.params.caseId);
-      if (!testCaseRow) {
-        return reply.code(404).send({ message: 'Test case not found' });
-      }
-
-      const environmentRow = db
-        .prepare<[string], EnvironmentRow>('SELECT * FROM environments WHERE id = ?')
-        .get(body.environmentId);
-      if (!environmentRow) {
-        return reply.code(404).send({ message: 'Environment not found' });
-      }
-
-      const mappedTestCase = mapTestCase(testCaseRow);
-      const previewTestCase = body.steps
-        ? { ...mappedTestCase, steps: body.steps.map(normalizeStep) }
-        : mappedTestCase;
-
-      return {
-        yaml: generateMidsceneYaml({
-          environment: mapEnvironment(environmentRow),
-          testCase: previewTestCase,
-        }),
-      };
-    },
-  );
-
-  app.post<{ Params: { suiteId: string }; Body: CreateCaseBody }>('/api/suites/:suiteId/cases', async (request, reply) => {
-    const body = parseRequestBody(createCaseBodySchema, request.body, reply);
-    if (!body) {
-      return reply;
-    }
-
-    const suite = suites.findById(request.params.suiteId);
-    if (!suite) {
-      return reply.code(404).send({ message: 'Test suite not found' });
-    }
-
-    return reply.code(201).send(cases.create({ ...body, projectId: suite.project_id, suiteId: suite.id }));
-  });
-
   app.patch<{ Params: { caseId: string }; Body: UpdateCaseBody }>('/api/cases/:caseId', async (request, reply) => {
     const body = parseRequestBody(updateCaseBodySchema, request.body, reply);
     if (!body) {
       return reply;
     }
+    if (body.yamlText !== undefined && !validateYamlText(body.yamlText, reply)) {
+      return reply;
+    }
 
-    const testCase = cases.update(request.params.caseId, body);
+    const testCase = cases.update(request.params.caseId, normalizeCaseInput(body));
     if (!testCase) {
       return reply.code(404).send({ message: 'Test case not found' });
     }
@@ -118,50 +75,49 @@ export async function registerCasesRoutes(app: FastifyInstance, db: DatabaseConn
   });
 
   app.delete<{ Params: { caseId: string } }>('/api/cases/:caseId', async (request, reply) => {
-    const deleted = cases.delete(request.params.caseId);
+    const testCase = cases.findById(request.params.caseId);
+    if (!testCase) {
+      return reply.code(404).send({ message: 'Test case not found' });
+    }
+
+    const caseRuns = runs.listByCase(testCase.id);
+    for (const run of caseRuns) {
+      queue?.cancel?.(run.id);
+      cancellation?.cancel(run.id);
+    }
+
+    const deleted = cases.delete(testCase.id);
     if (!deleted) {
       return reply.code(404).send({ message: 'Test case not found' });
+    }
+
+    for (const run of caseRuns) {
+      fs.rmSync(path.resolve(artifactsDir, 'runs', run.id), { recursive: true, force: true });
     }
 
     return { ok: true };
   });
 }
 
-function mapEnvironment(environment: EnvironmentRow): Environment {
+function normalizeCaseInput<T extends CreateCaseInput | UpdateCaseInput>(input: T): T {
   return {
-    id: environment.id,
-    projectId: environment.project_id,
-    name: environment.name,
-    baseUrl: environment.base_url,
-    browserType: environment.browser_type as Environment['browserType'],
-    viewportWidth: environment.viewport_width,
-    viewportHeight: environment.viewport_height,
-    defaultTimeoutMs: environment.default_timeout_ms,
-    isDefault: Boolean(environment.is_default),
-    createdAt: environment.created_at,
-    updatedAt: environment.updated_at,
+    ...input,
+    name: input.name?.trim(),
+    description: input.description?.trim(),
   };
 }
 
-function mapTestCase(testCase: CaseRow): TestCase {
-  return {
-    id: testCase.id,
-    projectId: testCase.project_id,
-    suiteId: testCase.suite_id,
-    name: testCase.name,
-    description: testCase.description,
-    enabled: Boolean(testCase.enabled),
-    tags: JSON.parse(testCase.tags_json) as TestCase['tags'],
-    steps: JSON.parse(testCase.steps_json) as TestCase['steps'],
-    createdAt: testCase.created_at,
-    updatedAt: testCase.updated_at,
-  };
-}
+function validateYamlText(yamlText: string, reply: FastifyReply) {
+  if (!yamlText?.trim()) {
+    reply.code(400).send({ message: 'YAML must not be empty' });
+    return false;
+  }
 
-function normalizeStep(step: z.input<typeof stepSchema>): Step {
-  return {
-    ...step,
-    enabled: step.enabled ?? true,
-    params: step.params ?? {},
-  };
+  try {
+    YAML.parse(yamlText);
+    return true;
+  } catch {
+    reply.code(400).send({ message: 'Invalid YAML' });
+    return false;
+  }
 }

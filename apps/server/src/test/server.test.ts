@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { openDatabase, type DatabaseConnection } from '../db/database.js';
+import { RunWorker } from '../worker/runWorker.js';
 
 const openConnections: DatabaseConnection[] = [];
 const databasePaths: string[] = [];
@@ -22,37 +23,23 @@ afterEach(() => {
 });
 
 describe('server bootstrap', () => {
-  it('initializes the database schema and enables foreign keys', () => {
-    const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
-    databasePaths.push(databasePath);
+  it('initializes the simplified case-centered schema', () => {
+    const databasePath = createDatabasePath();
     const db = openDatabase(databasePath);
     openConnections.push(db);
 
-    const foreignKeys = db.pragma('foreign_keys', { simple: true });
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
       .map((row) => (row as { name: string }).name);
 
-    expect(foreignKeys).toBe(1);
-    expect(tables).toEqual([
-      'artifacts',
-      'environments',
-      'projects',
-      'test_cases',
-      'test_run_cases',
-      'test_run_steps',
-      'test_runs',
-      'test_suites',
-    ]);
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(tables).toEqual(['artifacts', 'test_cases', 'test_runs']);
   });
 
   it('reports health with database availability', async () => {
-    const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
-    databasePaths.push(databasePath);
-    const db = openDatabase(databasePath);
+    const { app, db } = await createTestApp();
     openConnections.push(db);
-    const app = await buildApp({ db });
 
     const response = await app.inject({ method: 'GET', url: '/api/health' });
     await app.close();
@@ -62,1126 +49,208 @@ describe('server bootstrap', () => {
   });
 });
 
-describe('test asset API', () => {
-  it('creates and lists projects', async () => {
+describe('case API', () => {
+  it('creates, lists, fetches, updates, and deletes YAML cases', async () => {
     const { app, db } = await createTestApp();
     openConnections.push(db);
 
     const createResponse = await app.inject({
       method: 'POST',
-      url: '/api/projects',
-      payload: { name: 'Web 自动化', description: '核心项目' },
+      url: '/api/cases',
+      payload: { name: '登录成功', description: '有效账号登录', yamlText: validYaml('登录成功') },
     });
-    const listResponse = await app.inject({ method: 'GET', url: '/api/projects' });
+    const created = createResponse.json<TestCaseResponse>();
+    const listResponse = await app.inject({ method: 'GET', url: '/api/cases' });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/cases/${created.id}` });
+    const updateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/cases/${created.id}`,
+      payload: { name: '登录失败提示', description: '校验错误提示', yamlText: validYaml('登录失败提示') },
+    });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/cases/${created.id}` });
+    const missingResponse = await app.inject({ method: 'GET', url: `/api/cases/${created.id}` });
     await app.close();
 
     expect(createResponse.statusCode).toBe(201);
-    expect(createResponse.json()).toMatchObject({
-      name: 'Web 自动化',
-      description: '核心项目',
-      default_environment_id: null,
+    expect(created).toMatchObject({
+      name: '登录成功',
+      description: '有效账号登录',
+      yaml_text: validYaml('登录成功'),
     });
-    expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([createResponse.json()]);
-  });
-
-  it('fetches, updates, and deletes a project', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-
-    const getResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}` });
-    const updateResponse = await app.inject({
-      method: 'PATCH',
-      url: `/api/projects/${project.id}`,
-      payload: { name: 'Web 回归', description: '更新后的项目' },
-    });
-    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${project.id}` });
-    const missingResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}` });
-    const runsResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/runs` });
-    await app.close();
-
-    expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.json()).toMatchObject({ id: project.id, name: 'Web 自动化' });
-    expect(updateResponse.statusCode).toBe(200);
+    expect(listResponse.json<TestCaseListItem[]>()).toEqual([
+      expect.objectContaining({ id: created.id, latest_run_id: null, latest_run_status: null }),
+    ]);
+    expect(getResponse.json()).toEqual(created);
     expect(updateResponse.json()).toMatchObject({
-      id: project.id,
-      name: 'Web 回归',
-      description: '更新后的项目',
+      id: created.id,
+      name: '登录失败提示',
+      yaml_text: validYaml('登录失败提示'),
     });
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json()).toEqual({ ok: true });
     expect(missingResponse.statusCode).toBe(404);
-    expect(runsResponse.statusCode).toBe(200);
-    expect(runsResponse.json()).toEqual([]);
   });
 
-  it('creates and lists environments for a project', async () => {
+  it('rejects empty or invalid YAML when creating and updating cases', async () => {
     const { app, db } = await createTestApp();
     openConnections.push(db);
-    const project = await createProject(app);
+    const testCase = await createCase(app);
 
-    const createResponse = await app.inject({
+    const emptyResponse = await app.inject({
       method: 'POST',
-      url: `/api/projects/${project.id}/environments`,
-      payload: {
-        name: '本地环境',
-        baseUrl: 'https://example.com',
-        browserType: 'chromium',
-        viewportWidth: 1280,
-        viewportHeight: 720,
-        defaultTimeoutMs: 10000,
-        isDefault: true,
-      },
+      url: '/api/cases',
+      payload: { name: '空 YAML', yamlText: '   ' },
     });
-    const listResponse = await app.inject({
-      method: 'GET',
-      url: `/api/projects/${project.id}/environments`,
-    });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(201);
-    expect(createResponse.json()).toMatchObject({
-      project_id: project.id,
-      name: '本地环境',
-      base_url: 'https://example.com',
-      browser_type: 'chromium',
-      viewport_width: 1280,
-      viewport_height: 720,
-      default_timeout_ms: 10000,
-      is_default: 1,
-    });
-    expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([createResponse.json()]);
-    expect(
-      db.prepare<[string], { default_environment_id: string | null }>(
-        'SELECT default_environment_id FROM projects WHERE id = ?',
-      ).get(project.id)?.default_environment_id,
-    ).toBe(createResponse.json<EnvironmentResponse>().id);
-  });
-
-  it('updates and deletes environments while keeping project default environment consistent', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const firstEnvironment = await createEnvironment(app, project.id);
-    const secondCreateResponse = await app.inject({
-      method: 'POST',
-      url: `/api/projects/${project.id}/environments`,
-      payload: {
-        name: '预发环境',
-        baseUrl: 'https://staging.example.com',
-        browserType: 'firefox',
-        viewportWidth: 1440,
-        viewportHeight: 900,
-        defaultTimeoutMs: 15000,
-        isDefault: false,
-      },
-    });
-    const secondEnvironment = secondCreateResponse.json<EnvironmentResponse>();
-
-    const updateResponse = await app.inject({
-      method: 'PATCH',
-      url: `/api/environments/${secondEnvironment.id}`,
-      payload: {
-        name: '预发默认环境',
-        baseUrl: 'https://preview.example.com',
-        browserType: 'webkit',
-        viewportWidth: 1366,
-        viewportHeight: 768,
-        defaultTimeoutMs: 12000,
-        isDefault: true,
-      },
-    });
-    const listAfterUpdateResponse = await app.inject({
-      method: 'GET',
-      url: `/api/projects/${project.id}/environments`,
-    });
-    const defaultProjectAfterUpdate = db
-      .prepare<[string], { default_environment_id: string | null }>(
-        'SELECT default_environment_id FROM projects WHERE id = ?',
-      )
-      .get(project.id);
-    const deleteResponse = await app.inject({
-      method: 'DELETE',
-      url: `/api/environments/${secondEnvironment.id}`,
-    });
-    const listAfterDeleteResponse = await app.inject({
-      method: 'GET',
-      url: `/api/projects/${project.id}/environments`,
-    });
-    await app.close();
-
-    expect(secondCreateResponse.statusCode).toBe(201);
-    expect(updateResponse.statusCode).toBe(200);
-    expect(updateResponse.json()).toMatchObject({
-      id: secondEnvironment.id,
-      name: '预发默认环境',
-      base_url: 'https://preview.example.com',
-      browser_type: 'webkit',
-      viewport_width: 1366,
-      viewport_height: 768,
-      default_timeout_ms: 12000,
-      is_default: 1,
-    });
-    expect(listAfterUpdateResponse.json<EnvironmentRowForTest[]>()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: firstEnvironment.id, is_default: 0 }),
-        expect.objectContaining({ id: secondEnvironment.id, is_default: 1 }),
-      ]),
-    );
-    expect(defaultProjectAfterUpdate?.default_environment_id).toBe(secondEnvironment.id);
-    expect(deleteResponse.statusCode).toBe(200);
-    expect(listAfterDeleteResponse.json<EnvironmentRowForTest[]>()).toEqual([
-      expect.objectContaining({ id: firstEnvironment.id, is_default: 0 }),
-    ]);
-    expect(
-      db.prepare<[string], { default_environment_id: string | null }>(
-        'SELECT default_environment_id FROM projects WHERE id = ?',
-      ).get(project.id)?.default_environment_id,
-    ).toBeNull();
-  });
-
-  it('creates and lists suites for a project', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: `/api/projects/${project.id}/suites`,
-      payload: { name: '冒烟测试', description: '关键路径' },
-    });
-    const listResponse = await app.inject({
-      method: 'GET',
-      url: `/api/projects/${project.id}/suites`,
-    });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(201);
-    expect(createResponse.json()).toMatchObject({
-      project_id: project.id,
-      name: '冒烟测试',
-      description: '关键路径',
-      enabled: 1,
-    });
-    expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([
-      expect.objectContaining({
-        ...createResponse.json(),
-        case_count: 0,
-        run_count: 0,
-      }),
-    ]);
-  });
-
-  it('fetches, updates, and deletes a suite with its cases', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const getResponse = await app.inject({ method: 'GET', url: `/api/suites/${suite.id}` });
-    const updateResponse = await app.inject({
-      method: 'PATCH',
-      url: `/api/suites/${suite.id}`,
-      payload: { name: '回归测试', description: '全量回归', enabled: false },
-    });
-    const listResponse = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/suites` });
-    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/suites/${suite.id}` });
-    const missingCaseResponse = await app.inject({ method: 'GET', url: `/api/cases/${testCase.id}` });
-    await app.close();
-
-    expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.json()).toMatchObject({ id: suite.id, name: '冒烟测试' });
-    expect(updateResponse.statusCode).toBe(200);
-    expect(updateResponse.json()).toMatchObject({
-      id: suite.id,
-      name: '回归测试',
-      description: '全量回归',
-      enabled: 0,
-    });
-    expect(listResponse.json<SuiteRowForTest[]>()).toEqual([
-      expect.objectContaining({ id: suite.id, case_count: 1 }),
-    ]);
-    expect(deleteResponse.statusCode).toBe(200);
-    expect(missingCaseResponse.statusCode).toBe(404);
-  });
-
-  it('creates, lists, and fetches cases for a suite', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const suite = await createSuite(app, project.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: `/api/suites/${suite.id}/cases`,
-      payload: { projectId: 'different-project', name: '登录成功', description: '使用有效账号登录' },
-    });
-    const listResponse = await app.inject({
-      method: 'GET',
-      url: `/api/suites/${suite.id}/cases`,
-    });
-    const getResponse = await app.inject({
-      method: 'GET',
-      url: `/api/cases/${createResponse.json<TestCaseResponse>().id}`,
-    });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(201);
-    expect(createResponse.json()).toMatchObject({
-      project_id: project.id,
-      suite_id: suite.id,
-      name: '登录成功',
-      description: '使用有效账号登录',
-      enabled: 1,
-      tags_json: '[]',
-      steps_json: '[]',
-    });
-    expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([createResponse.json()]);
-    expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.json()).toEqual(createResponse.json());
-  });
-
-  it('updates and deletes a case', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const updateResponse = await app.inject({
+    const invalidResponse = await app.inject({
       method: 'PATCH',
       url: `/api/cases/${testCase.id}`,
-      payload: {
-        name: '登录失败提示',
-        description: '校验错误提示',
-        enabled: false,
-        tags: ['regression', 'login'],
-      },
-    });
-    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/cases/${testCase.id}` });
-    const missingResponse = await app.inject({ method: 'GET', url: `/api/cases/${testCase.id}` });
-    await app.close();
-
-    expect(updateResponse.statusCode).toBe(200);
-    expect(updateResponse.json()).toMatchObject({
-      id: testCase.id,
-      name: '登录失败提示',
-      description: '校验错误提示',
-      enabled: 0,
-      tags_json: JSON.stringify(['regression', 'login']),
-    });
-    expect(deleteResponse.statusCode).toBe(200);
-    expect(missingResponse.statusCode).toBe(404);
-  });
-
-  it('saves case steps through the case patch endpoint', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    const steps = [
-      {
-        id: 'step_1',
-        type: 'navigate',
-        title: '打开登录页',
-        enabled: true,
-        params: { path: '/login' },
-      },
-      {
-        id: 'step_2',
-        type: 'aiTap',
-        title: '点击登录',
-        enabled: true,
-        params: { locate: '登录按钮' },
-      },
-    ];
-
-    const updateResponse = await app.inject({
-      method: 'PATCH',
-      url: `/api/cases/${testCase.id}`,
-      payload: { steps },
+      payload: { yamlText: 'web:\n  url: [broken' },
     });
     await app.close();
 
-    expect(updateResponse.statusCode).toBe(200);
-    expect(updateResponse.json()).toMatchObject({
-      id: testCase.id,
-      steps_json: JSON.stringify(steps),
-    });
-  });
-
-  it('returns 404 when fetching a missing case', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-
-    const response = await app.inject({ method: 'GET', url: '/api/cases/missing-case' });
-    await app.close();
-
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ message: 'Test case not found' });
-  });
-
-  it('returns 400 when creating a project without a name', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/projects',
-      payload: { description: '缺少名称' },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(400);
-  });
-
-  it('returns 404 when creating an environment under a missing project', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/projects/missing-project/environments',
-      payload: {
-        name: '本地环境',
-        baseUrl: 'https://example.com',
-        browserType: 'chromium',
-        viewportWidth: 1280,
-        viewportHeight: 720,
-        defaultTimeoutMs: 10000,
-        isDefault: true,
-      },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(404);
-  });
-
-  it('returns 404 when creating a suite under a missing project', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/projects/missing-project/suites',
-      payload: { name: '冒烟测试' },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(404);
-  });
-
-  it('returns 404 when creating a case under a missing suite', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/suites/missing-suite/cases',
-      payload: { name: '登录成功' },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(404);
-  });
-
-  it('previews generated Midscene YAML for a case and environment', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
-      JSON.stringify([
-        {
-          id: 'step_1',
-          type: 'navigate',
-          title: '打开登录页',
-          enabled: true,
-          params: { path: '/login' },
-        },
-        {
-          id: 'step_2',
-          type: 'aiTap',
-          title: '点击登录',
-          enabled: true,
-          params: { locate: '登录按钮' },
-        },
-      ]),
-      testCase.id,
-    );
-
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/cases/${testCase.id}/preview-midscene-yaml`,
-      payload: { environmentId: environment.id },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json<PreviewYamlResponse>().yaml).toContain('url: https://example.com/login');
-    expect(response.json<PreviewYamlResponse>().yaml).toContain('aiTap: 登录按钮');
-  });
-
-  it('previews generated Midscene YAML from submitted unsaved steps', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/cases/${testCase.id}/preview-midscene-yaml`,
-      payload: {
-        environmentId: environment.id,
-        steps: [
-          {
-            id: 'step_1',
-            type: 'navigate',
-            title: '打开设置页',
-            enabled: true,
-            params: { path: '/settings' },
-          },
-          {
-            id: 'step_2',
-            type: 'aiAssert',
-            title: '检查页面',
-            enabled: true,
-            params: { prompt: '页面展示账户设置' },
-          },
-        ],
-      },
-    });
-    await app.close();
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json<PreviewYamlResponse>().yaml).toContain('url: https://example.com/settings');
-    expect(response.json<PreviewYamlResponse>().yaml).toContain('aiAssert: 页面展示账户设置');
+    expect(emptyResponse.statusCode).toBe(400);
+    expect(invalidResponse.statusCode).toBe(400);
   });
 });
 
 describe('run API and worker', () => {
-  it('creates a run, enqueues it, and lists runs for the project', async () => {
+  it('creates a single-case run and exposes run detail', async () => {
     const { app, db, enqueuedJobs } = await createTestApp();
     openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
+    const testCase = await createCase(app);
 
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
+    const createResponse = await app.inject({ method: 'POST', url: `/api/cases/${testCase.id}/runs` });
     const run = createResponse.json<RunResponse>();
-    const listResponse = await app.inject({
-      method: 'GET',
-      url: `/api/projects/${project.id}/runs`,
-    });
+    const listResponse = await app.inject({ method: 'GET', url: `/api/cases/${testCase.id}/runs` });
+    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
     await app.close();
 
     expect(createResponse.statusCode).toBe(201);
-    expect(run).toMatchObject({
-      project_id: project.id,
-      environment_id: environment.id,
-      scope_type: 'case',
-      scope_id: testCase.id,
-      status: 'pending',
-    });
+    expect(run).toMatchObject({ case_id: testCase.id, status: 'pending', exit_code: null });
     expect(enqueuedJobs).toEqual([{ runId: run.id }]);
-    expect(listResponse.statusCode).toBe(200);
-    expect(listResponse.json()).toEqual([run]);
+    expect(listResponse.json<RunResponse[]>()).toEqual([run]);
+    expect(detailResponse.json<RunDetailResponse>()).toEqual({ run, artifacts: [] });
   });
 
-  it('cancels a pending run and pending run cases', async () => {
-    const { app, db, enqueuedJobs, canceledRunIds } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    const cancelResponse = await app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel` });
-    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
-    await app.close();
-
-    expect(cancelResponse.statusCode).toBe(200);
-    expect(cancelResponse.json<RunResponse>().status).toBe('canceled');
-    expect(canceledRunIds).toEqual([run.id]);
-    expect(enqueuedJobs).toEqual([]);
-    expect(detailResponse.json<RunDetailResponse>().run.status).toBe('canceled');
-    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.status)).toEqual(['canceled']);
-  });
-
-  it('keeps a canceled run canceled when a worker receives the stale job', async () => {
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
+  it('runs the saved Midscene YAML, stores artifacts, and serves the visual report', async () => {
+    const artifactRoot = createArtifactRoot();
     const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
     openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
+    const testCase = await createCase(app, { yamlText: validYaml('打开首页') });
+    const createResponse = await app.inject({ method: 'POST', url: `/api/cases/${testCase.id}/runs` });
     const run = createResponse.json<RunResponse>();
-    await app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel` });
-    const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({ db, artifactsDir: artifactRoot });
-
-    await worker.run({ runId: run.id });
-    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
-    await app.close();
-
-    expect(detailResponse.json<RunDetailResponse>().run.status).toBe('canceled');
-    expect(detailResponse.json<RunDetailResponse>().steps).toEqual([]);
-    expect(fs.existsSync(path.join(artifactRoot, 'runs', run.id))).toBe(false);
-  });
-
-  it('creates a suite run and expands it into run case records', async () => {
-    const { app, db, enqueuedJobs } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const firstCase = await createCase(app, suite.id);
-    const secondCase = await createCase(app, suite.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'suite',
-        scopeId: suite.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    const detailResponse = await app.inject({
-      method: 'GET',
-      url: `/api/runs/${run.id}`,
-    });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(201);
-    expect(run).toMatchObject({
-      project_id: project.id,
-      environment_id: environment.id,
-      scope_type: 'suite',
-      scope_id: suite.id,
-      total_cases: 2,
-      status: 'pending',
-    });
-    expect(enqueuedJobs).toEqual([{ runId: run.id }]);
-    expect(detailResponse.statusCode).toBe(200);
-    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.test_case_id)).toEqual([
-      firstCase.id,
-      secondCase.id,
-    ]);
-  });
-
-  it('rejects runs that use an environment from another project', async () => {
-    const { app, db, enqueuedJobs } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const otherProject = await createProject(app);
-    const otherEnvironment = await createEnvironment(app, otherProject.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: otherEnvironment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(400);
-    expect(enqueuedJobs).toEqual([]);
-  });
-
-  it('keeps selection run cases in the requested order', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const firstCase = await createCase(app, suite.id);
-    const secondCase = await createCase(app, suite.id);
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'selection',
-        caseIds: [secondCase.id, firstCase.id],
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    db.prepare<[string, string]>('UPDATE test_run_cases SET id = ? WHERE test_case_id = ?').run('z_second', secondCase.id);
-    db.prepare<[string, string]>('UPDATE test_run_cases SET id = ? WHERE test_case_id = ?').run('a_first', firstCase.id);
-    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
-    await app.close();
-
-    expect(createResponse.statusCode).toBe(201);
-    expect(detailResponse.json<RunDetailResponse>().cases.map((runCase) => runCase.test_case_id)).toEqual([
-      secondCase.id,
-      firstCase.id,
-    ]);
-  });
-
-  it('generates a Midscene YAML artifact and marks the run successful', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
-
-    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
-      JSON.stringify([
-        {
-          id: 'step_1',
-          type: 'navigate',
-          title: '打开登录页',
-          enabled: true,
-          params: { path: '/login' },
-        },
-        {
-          id: 'step_2',
-          type: 'aiTap',
-          title: '点击登录',
-          enabled: true,
-          params: { locate: '登录按钮' },
-        },
-      ]),
-      testCase.id,
-    );
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({
-      db,
-      artifactsDir: artifactRoot,
-      executeMidscene: async () => {
-        return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
-      },
-    });
-
-    await worker.run({ runId: run.id });
-    const completedRun = db.prepare<[string], RunResponse>('SELECT * FROM test_runs WHERE id = ?').get(run.id);
-    await app.close();
-
-    expect(completedRun?.status).toBe('success');
-    expect(fs.readFileSync(path.join(artifactRoot, 'runs', run.id, 'midscene.yaml'), 'utf8')).toContain(
-      'url: https://example.com/login',
-    );
-  });
-
-  it('returns persisted run artifacts in run detail', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-
-    db.prepare(
-      `INSERT INTO artifacts (id, run_id, run_case_id, type, path, created_at)
-       VALUES ('artifact_1', ?, NULL, 'visual_report', 'visual-report.html', '2026-06-01T00:00:00.000Z')`,
-    ).run(run.id);
-
-    const response = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
-    await app.close();
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json<RunDetailResponse>().artifacts).toEqual([
-      {
-        id: 'artifact_1',
-        run_id: run.id,
-        run_case_id: null,
-        type: 'visual_report',
-        path: 'visual-report.html',
-        created_at: '2026-06-01T00:00:00.000Z',
-      },
-    ]);
-  });
-
-  it('serves persisted artifact files through the run-scoped endpoint', async () => {
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
-    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: { projectId: project.id, environmentId: environment.id, scopeType: 'case', scopeId: testCase.id },
-    });
-    const run = createResponse.json<RunResponse>();
-    const reportDir = path.join(artifactRoot, 'runs', run.id);
-    fs.mkdirSync(reportDir, { recursive: true });
-    fs.writeFileSync(path.join(reportDir, 'visual-report.html'), '<html>report</html>', 'utf8');
-
-    const response = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/artifacts/visual-report.html` });
-    const traversalResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/artifacts/..%2Fschema.sql` });
-    await app.close();
-
-    expect(response.statusCode).toBe(200);
-    expect(response.headers['content-type']).toContain('text/html');
-    expect(response.body).toContain('report');
-    expect(traversalResponse.statusCode).toBe(404);
-  });
-
-  it('serves run artifacts through a run-scoped endpoint', async () => {
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
-    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-
-    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
-      JSON.stringify([
-        {
-          id: 'step_1',
-          type: 'navigate',
-          title: '打开登录页',
-          enabled: true,
-          params: { path: '/login' },
-        },
-      ]),
-      testCase.id,
-    );
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'case',
-        scopeId: testCase.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({
-      db,
-      artifactsDir: artifactRoot,
-      executeMidscene: async () => {
-        return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
-      },
-    });
-
-    await worker.run({ runId: run.id });
-    const yamlResponse = await app.inject({
-      method: 'GET',
-      url: `/api/runs/${run.id}/artifacts/midscene.yaml`,
-    });
-    const logResponse = await app.inject({
-      method: 'GET',
-      url: `/api/runs/${run.id}/artifacts/logs/run.log`,
-    });
-    const traversalResponse = await app.inject({
-      method: 'GET',
-      url: `/api/runs/${run.id}/artifacts/..%2F..%2Fschema.sql`,
-    });
-    const missingRunResponse = await app.inject({
-      method: 'GET',
-      url: '/api/runs/missing-run/artifacts/midscene.yaml',
-    });
-    await app.close();
-
-    expect(yamlResponse.statusCode).toBe(200);
-    expect(yamlResponse.headers['content-type']).toContain('text/plain');
-    expect(yamlResponse.body).toContain('url: https://example.com/login');
-    expect(logResponse.statusCode).toBe(200);
-    expect(logResponse.body).toContain('Generated Midscene YAML');
-    expect(traversalResponse.statusCode).toBe(404);
-    expect(missingRunResponse.statusCode).toBe(404);
-  });
-
-  it('executes each run case through the runner and stores artifacts', async () => {
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
-    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const testCase = await createCase(app, suite.id);
-    db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
-      JSON.stringify([{ id: 'step_1', type: 'aiAssert', title: '检查首页', enabled: true, params: { prompt: '首页存在' } }]),
-      testCase.id,
-    );
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: { projectId: project.id, environmentId: environment.id, scopeType: 'case', scopeId: testCase.id },
-    });
-    const run = createResponse.json<RunResponse>();
-    const { RunWorker } = await import('../worker/runWorker.js');
     const worker = new RunWorker({
       db,
       artifactsDir: artifactRoot,
       executeMidscene: async ({ outputDir }) => {
-        fs.writeFileSync(path.join(outputDir, 'summary.json'), JSON.stringify({ pass: 1, fail: 0 }), 'utf8');
-        fs.writeFileSync(
-          path.join(outputDir, 'result-login.json'),
-          JSON.stringify({
-            tasks: [
-              {
-                title: '检查首页',
-                type: 'aiAssert',
-                status: 'failed',
-                error: '首页不存在',
-                screenshot: 'screenshots/step-1.png',
-              },
-            ],
-          }),
-          'utf8',
-        );
-        fs.writeFileSync(path.join(outputDir, 'visual-report.html'), '<html></html>', 'utf8');
-        return { status: 'failed', exitCode: 1, stdout: 'done', stderr: 'assert failed', summaryPath: 'summary.json' };
-      },
-    });
-
-    await worker.run({ runId: run.id });
-    const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
-    await app.close();
-
-    const detail = detailResponse.json<RunDetailResponse>();
-    expect(detail.run.status).toBe('failed');
-    expect(detail.artifacts.map((a: { type: string }) => a.type)).toContain('visual_report');
-    expect(detail.artifacts.map((a: { type: string }) => a.type)).toContain('summary_json');
-    expect(detail.steps).toEqual([
-      expect.objectContaining({
-        step_title: '检查首页',
-        step_type: 'aiAssert',
-        status: 'failed',
-        error_message: '首页不存在',
-        screenshot_path: 'cases/' + detail.cases[0]?.id + '/screenshots/step-1.png',
-      }),
-    ]);
-    expect(detail.steps[0]?.raw_result_json).toContain('首页不存在');
-  });
-
-  it('stores case and step results when a suite run completes', async () => {
-    const { app, db } = await createTestApp();
-    openConnections.push(db);
-    const project = await createProject(app);
-    const environment = await createEnvironment(app, project.id);
-    const suite = await createSuite(app, project.id);
-    const firstCase = await createCase(app, suite.id);
-    const secondCase = await createCase(app, suite.id);
-    const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
-    artifactPaths.push(artifactRoot);
-
-    for (const testCase of [firstCase, secondCase]) {
-      db.prepare<[string, string]>('UPDATE test_cases SET steps_json = ? WHERE id = ?').run(
-        JSON.stringify([
-          {
-            id: `${testCase.id}_step_1`,
-            type: 'navigate',
-            title: '打开登录页',
-            enabled: true,
-            params: { path: '/login' },
-          },
-          {
-            id: `${testCase.id}_step_2`,
-            type: 'aiAssert',
-            title: '检查首页',
-            enabled: true,
-            params: { prompt: '页面展示首页' },
-          },
-        ]),
-        testCase.id,
-      );
-    }
-
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/runs',
-      payload: {
-        projectId: project.id,
-        environmentId: environment.id,
-        scopeType: 'suite',
-        scopeId: suite.id,
-      },
-    });
-    const run = createResponse.json<RunResponse>();
-    const { RunWorker } = await import('../worker/runWorker.js');
-    const worker = new RunWorker({
-      db,
-      artifactsDir: artifactRoot,
-      executeMidscene: async () => {
+        fs.writeFileSync(path.join(outputDir, 'summary.json'), JSON.stringify({ pass: 1 }), 'utf8');
+        fs.writeFileSync(path.join(outputDir, 'visual-report.html'), '<html>report</html>', 'utf8');
         return { status: 'success', exitCode: 0, stdout: 'ok', stderr: '', summaryPath: 'summary.json' };
       },
     });
 
     await worker.run({ runId: run.id });
     const detailResponse = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
+    const reportResponse = await app.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}/artifacts/visual-report.html`,
+    });
     await app.close();
 
-    expect(detailResponse.statusCode).toBe(200);
-    expect(detailResponse.json<RunDetailResponse>().run).toMatchObject({
-      status: 'success',
-      total_cases: 2,
-      passed_cases: 2,
-      failed_cases: 0,
+    const detail = detailResponse.json<RunDetailResponse>();
+    expect(detail.run).toMatchObject({ id: run.id, status: 'success', exit_code: 0 });
+    expect(detail.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'midscene_yaml', path: 'midscene.yaml' }),
+        expect.objectContaining({ type: 'visual_report', path: 'visual-report.html' }),
+        expect.objectContaining({ type: 'summary_json', path: 'summary.json' }),
+      ]),
+    );
+    expect(fs.readFileSync(path.join(artifactRoot, 'runs', run.id, 'midscene.yaml'), 'utf8')).toBe(validYaml('打开首页'));
+    expect(reportResponse.statusCode).toBe(200);
+    expect(reportResponse.headers['content-type']).toContain('text/html');
+    expect(reportResponse.body).toContain('report');
+  });
+
+  it('marks failed and canceled runs with exit code and error message', async () => {
+    const { app, db, canceledRunIds } = await createTestApp();
+    openConnections.push(db);
+    const testCase = await createCase(app);
+    const createResponse = await app.inject({ method: 'POST', url: `/api/cases/${testCase.id}/runs` });
+    const run = createResponse.json<RunResponse>();
+    const cancelResponse = await app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel` });
+    const worker = new RunWorker({
+      db,
+      artifactsDir: createArtifactRoot(),
+      executeMidscene: async () => {
+        throw new Error('should not execute canceled run');
+      },
     });
-    expect(detailResponse.json<RunDetailResponse>().cases).toHaveLength(2);
-    expect(detailResponse.json<RunDetailResponse>().steps).toHaveLength(4);
-    expect(detailResponse.json<RunDetailResponse>().steps.every((step) => step.status === 'success')).toBe(true);
+
+    await worker.run({ runId: run.id });
+    await app.close();
+
+    expect(cancelResponse.statusCode).toBe(200);
+    expect(cancelResponse.json<RunResponse>()).toMatchObject({ id: run.id, status: 'canceled' });
+    expect(canceledRunIds).toEqual([run.id]);
+    expect(db.prepare<[string], RunResponse>('SELECT * FROM test_runs WHERE id = ?').get(run.id)?.status).toBe(
+      'canceled',
+    );
+  });
+
+  it('deletes a case with its runs, artifacts, and artifact directories', async () => {
+    const artifactRoot = createArtifactRoot();
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const testCase = await createCase(app);
+    const createResponse = await app.inject({ method: 'POST', url: `/api/cases/${testCase.id}/runs` });
+    const run = createResponse.json<RunResponse>();
+    const runDir = path.join(artifactRoot, 'runs', run.id);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'visual-report.html'), '<html></html>', 'utf8');
+
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/cases/${testCase.id}` });
+    await app.close();
+
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(db.prepare('SELECT * FROM test_runs WHERE case_id = ?').all(testCase.id)).toEqual([]);
+    expect(db.prepare('SELECT * FROM artifacts WHERE run_id = ?').all(run.id)).toEqual([]);
+    expect(fs.existsSync(runDir)).toBe(false);
   });
 });
 
-interface ProjectResponse {
-  id: string;
-}
-
-interface EnvironmentResponse {
-  id: string;
-}
-
-interface EnvironmentRowForTest {
-  id: string;
-  is_default: number;
-}
-
-interface SuiteResponse {
-  id: string;
-}
-
-interface SuiteRowForTest {
-  id: string;
-  case_count: number;
-}
-
 interface TestCaseResponse {
   id: string;
+  name: string;
+  description: string;
+  yaml_text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TestCaseListItem extends TestCaseResponse {
+  latest_run_id: string | null;
+  latest_run_status: string | null;
+  latest_visual_report_path: string | null;
 }
 
 interface RunResponse {
   id: string;
-  project_id: string;
-  environment_id: string;
-  scope_type: string;
-  scope_id: string | null;
+  case_id: string;
   status: string;
-  total_cases: number;
-  passed_cases: number;
-  failed_cases: number;
-}
-
-interface PreviewYamlResponse {
-  yaml: string;
+  exit_code: number | null;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  created_at: string;
 }
 
 interface RunDetailResponse {
   run: RunResponse;
-  cases: Array<{
-    id: string;
-    test_case_id: string;
-    run_order: number;
-    status: string;
-  }>;
-  steps: Array<{
-    id: string;
-    run_case_id: string;
-    step_id: string;
-    status: string;
-  }>;
   artifacts: Array<{
     id: string;
     run_id: string;
-    run_case_id: string | null;
     type: string;
     path: string;
     created_at: string;
@@ -1193,8 +262,7 @@ interface EnqueuedRunJob {
 }
 
 async function createTestApp(options: { artifactsDir?: string } = {}) {
-  const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
-  databasePaths.push(databasePath);
+  const databasePath = createDatabasePath();
   const db = openDatabase(databasePath);
   const enqueuedJobs: EnqueuedRunJob[] = [];
   const canceledRunIds: string[] = [];
@@ -1205,61 +273,44 @@ async function createTestApp(options: { artifactsDir?: string } = {}) {
     cancel(runId: string) {
       canceledRunIds.push(runId);
       const queuedIndex = enqueuedJobs.findIndex((job) => job.runId === runId);
-      if (queuedIndex === -1) {
-        return false;
+      if (queuedIndex >= 0) {
+        enqueuedJobs.splice(queuedIndex, 1);
       }
-
-      enqueuedJobs.splice(queuedIndex, 1);
-      return true;
+      return queuedIndex >= 0;
     },
   };
   const app = await buildApp({ db, runQueue, artifactsDir: options.artifactsDir });
   return { app, db, enqueuedJobs, canceledRunIds };
 }
 
-async function createProject(app: Awaited<ReturnType<typeof buildApp>>): Promise<ProjectResponse> {
-  const response = await app.inject({
-    method: 'POST',
-    url: '/api/projects',
-    payload: { name: 'Web 自动化' },
-  });
-  return response.json<ProjectResponse>();
-}
-
-async function createSuite(app: Awaited<ReturnType<typeof buildApp>>, projectId: string): Promise<SuiteResponse> {
-  const response = await app.inject({
-    method: 'POST',
-    url: `/api/projects/${projectId}/suites`,
-    payload: { name: '冒烟测试' },
-  });
-  return response.json<SuiteResponse>();
-}
-
-async function createEnvironment(
+async function createCase(
   app: Awaited<ReturnType<typeof buildApp>>,
-  projectId: string,
-): Promise<EnvironmentResponse> {
+  overrides: { name?: string; description?: string; yamlText?: string } = {},
+): Promise<TestCaseResponse> {
   const response = await app.inject({
     method: 'POST',
-    url: `/api/projects/${projectId}/environments`,
+    url: '/api/cases',
     payload: {
-      name: '本地环境',
-      baseUrl: 'https://example.com',
-      browserType: 'chromium',
-      viewportWidth: 1280,
-      viewportHeight: 720,
-      defaultTimeoutMs: 10000,
-      isDefault: true,
+      name: overrides.name ?? '登录成功',
+      description: overrides.description ?? '',
+      yamlText: overrides.yamlText ?? validYaml(overrides.name ?? '登录成功'),
     },
   });
-  return response.json<EnvironmentResponse>();
+  return response.json<TestCaseResponse>();
 }
 
-async function createCase(app: Awaited<ReturnType<typeof buildApp>>, suiteId: string): Promise<TestCaseResponse> {
-  const response = await app.inject({
-    method: 'POST',
-    url: `/api/suites/${suiteId}/cases`,
-    payload: { name: '登录成功' },
-  });
-  return response.json<TestCaseResponse>();
+function validYaml(name: string) {
+  return ['web:', '  url: https://example.com', 'tasks:', `  - name: ${name}`, '    flow:', '      - aiAssert: 页面加载成功', ''].join('\n');
+}
+
+function createDatabasePath() {
+  const databasePath = path.join(os.tmpdir(), `automatic-testing-${crypto.randomUUID()}.sqlite`);
+  databasePaths.push(databasePath);
+  return databasePath;
+}
+
+function createArtifactRoot() {
+  const artifactRoot = path.join(os.tmpdir(), `automatic-testing-artifacts-${crypto.randomUUID()}`);
+  artifactPaths.push(artifactRoot);
+  return artifactRoot;
 }

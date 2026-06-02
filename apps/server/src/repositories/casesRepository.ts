@@ -3,30 +3,29 @@ import type { DatabaseConnection } from '../db/database.js';
 
 export interface CaseRow {
   id: string;
-  project_id: string;
-  suite_id: string;
   name: string;
   description: string;
-  enabled: number;
-  tags_json: string;
-  steps_json: string;
+  yaml_text: string;
   created_at: string;
   updated_at: string;
 }
 
+export interface CaseListItem extends CaseRow {
+  latest_run_id: string | null;
+  latest_run_status: string | null;
+  latest_visual_report_path: string | null;
+}
+
 export interface CreateCaseInput {
-  projectId: string;
-  suiteId: string;
   name: string;
   description?: string;
+  yamlText: string;
 }
 
 export interface UpdateCaseInput {
   name?: string;
   description?: string;
-  enabled?: boolean;
-  tags?: string[];
-  steps?: unknown[];
+  yamlText?: string;
 }
 
 export function createCaseRepository(db: DatabaseConnection) {
@@ -35,10 +34,34 @@ export function createCaseRepository(db: DatabaseConnection) {
   }
 
   return {
-    listBySuite(suiteId: string): CaseRow[] {
+    list(): CaseListItem[] {
       return db
-        .prepare<[string], CaseRow>('SELECT * FROM test_cases WHERE suite_id = ? ORDER BY updated_at DESC')
-        .all(suiteId);
+        .prepare<[], CaseListItem>(
+          `SELECT
+             test_cases.*,
+             latest_run.id AS latest_run_id,
+             latest_run.status AS latest_run_status,
+             latest_visual_report.path AS latest_visual_report_path
+           FROM test_cases
+           LEFT JOIN test_runs AS latest_run
+             ON latest_run.id = (
+               SELECT id
+               FROM test_runs
+               WHERE test_runs.case_id = test_cases.id
+               ORDER BY created_at DESC, id DESC
+               LIMIT 1
+             )
+           LEFT JOIN artifacts AS latest_visual_report
+             ON latest_visual_report.id = (
+               SELECT id
+               FROM artifacts
+               WHERE artifacts.run_id = latest_run.id AND artifacts.type = 'visual_report'
+               ORDER BY created_at ASC, id ASC
+               LIMIT 1
+             )
+           ORDER BY test_cases.updated_at DESC, test_cases.id DESC`,
+        )
+        .all();
     },
 
     findById,
@@ -47,35 +70,19 @@ export function createCaseRepository(db: DatabaseConnection) {
       const now = new Date().toISOString();
       const testCase: CaseRow = {
         id: nanoid(),
-        project_id: input.projectId,
-        suite_id: input.suiteId,
         name: input.name,
         description: input.description ?? '',
-        enabled: 1,
-        tags_json: JSON.stringify([]),
-        steps_json: JSON.stringify([]),
+        yaml_text: input.yamlText,
         created_at: now,
         updated_at: now,
       };
 
       db.prepare(
-        `INSERT INTO test_cases
-          (id, project_id, suite_id, name, description, enabled, tags_json, steps_json, created_at, updated_at)
-         VALUES
-          (@id, @project_id, @suite_id, @name, @description, @enabled, @tags_json, @steps_json, @created_at, @updated_at)`,
+        `INSERT INTO test_cases (id, name, description, yaml_text, created_at, updated_at)
+         VALUES (@id, @name, @description, @yaml_text, @created_at, @updated_at)`,
       ).run(testCase);
 
       return testCase;
-    },
-
-    updateSteps(caseId: string, steps: unknown[]): CaseRow | undefined {
-      const now = new Date().toISOString();
-      db.prepare<[string, string, string]>('UPDATE test_cases SET steps_json = ?, updated_at = ? WHERE id = ?').run(
-        JSON.stringify(steps),
-        now,
-        caseId,
-      );
-      return findById(caseId);
     },
 
     update(caseId: string, input: UpdateCaseInput): CaseRow | undefined {
@@ -88,9 +95,7 @@ export function createCaseRepository(db: DatabaseConnection) {
         ...testCase,
         name: input.name ?? testCase.name,
         description: input.description ?? testCase.description,
-        enabled: input.enabled === undefined ? testCase.enabled : input.enabled ? 1 : 0,
-        tags_json: input.tags ? JSON.stringify(input.tags) : testCase.tags_json,
-        steps_json: input.steps ? JSON.stringify(input.steps) : testCase.steps_json,
+        yaml_text: input.yamlText ?? testCase.yaml_text,
         updated_at: new Date().toISOString(),
       };
 
@@ -98,9 +103,7 @@ export function createCaseRepository(db: DatabaseConnection) {
         `UPDATE test_cases
          SET name = @name,
              description = @description,
-             enabled = @enabled,
-             tags_json = @tags_json,
-             steps_json = @steps_json,
+             yaml_text = @yaml_text,
              updated_at = @updated_at
          WHERE id = @id`,
       ).run(updatedCase);
