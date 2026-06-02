@@ -3,8 +3,10 @@ node_modules/
 dist/
 .env
 .env.*
+!.env.example
 /artifacts/
 data/
 *.log
 *.tsbuildinfo
 .DS_Store
+apps/server/artifacts/runs

@@ -99,6 +99,23 @@ export function CaseListPage() {
           ),
       },
       {
+        title: '日志',
+        key: 'log',
+        width: 140,
+        render: (_value, record) =>
+          record?.latest_run_id && record?.latest_run_status === 'failed' && record?.latest_log_path ? (
+            <Typography.Link
+              href={getRunArtifactUrl(record.latest_run_id, record.latest_log_path)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              查看失败日志
+            </Typography.Link>
+          ) : (
+            '-'
+          ),
+      },
+      {
         title: '更新时间',
         dataIndex: 'updated_at',
         width: 180,

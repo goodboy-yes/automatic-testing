@@ -56,6 +56,10 @@ export function CaseEditorPage() {
     () => runDetail?.artifacts?.find((artifact) => artifact?.type === 'visual_report'),
     [runDetail?.artifacts],
   );
+  const failureLog = useMemo(
+    () => (currentRun?.status === 'failed' ? findPreferredLogArtifact(runDetail?.artifacts ?? []) : undefined),
+    [currentRun?.status, runDetail?.artifacts],
+  );
 
   useEffect(() => {
     const testCase = caseQuery.data;
@@ -138,6 +142,8 @@ export function CaseEditorPage() {
   const runButtonDisabled = !caseId || dirty || createRunMutation.isPending || updateCaseMutation.isPending;
   const visualReportUrl =
     currentRun?.id && visualReport?.path ? getRunArtifactUrl(currentRun.id, visualReport.path) : undefined;
+  const failureLogUrl =
+    currentRun?.id && failureLog?.path ? getRunArtifactUrl(currentRun.id, failureLog.path) : undefined;
 
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
@@ -220,7 +226,12 @@ export function CaseEditorPage() {
             ) : (
               <Typography.Text type="secondary">{currentRun ? '暂无报告' : '暂无运行记录'}</Typography.Text>
             )}
-            {renderArtifactLinks(currentRun, runDetail?.artifacts ?? [])}
+            {failureLogUrl ? (
+              <Typography.Link href={failureLogUrl} target="_blank" rel="noreferrer">
+                查看失败日志
+              </Typography.Link>
+            ) : null}
+            {renderArtifactLinks(currentRun, runDetail?.artifacts ?? [], failureLog?.id)}
           </Space>
         </Space>
       </Card>
@@ -255,13 +266,13 @@ function statusLabel(status: RunStatus) {
   return labels[status];
 }
 
-function renderArtifactLinks(run: RunRow | undefined, artifacts: RunArtifactRow[]) {
+function renderArtifactLinks(run: RunRow | undefined, artifacts: RunArtifactRow[], excludedArtifactId?: string) {
   if (!run?.id || artifacts.length === 0) {
     return null;
   }
 
   return artifacts
-    .filter((artifact) => artifact?.type !== 'visual_report')
+    .filter((artifact) => artifact?.type !== 'visual_report' && artifact?.id !== excludedArtifactId)
     .map((artifact) => (
       <Typography.Link key={artifact.id} href={getRunArtifactUrl(run.id, artifact.path)} target="_blank" rel="noreferrer">
         {artifactTypeLabel(artifact.type)}
@@ -279,6 +290,15 @@ function artifactTypeLabel(type: RunArtifactRow['type']) {
     log: '日志',
   };
   return labels[type];
+}
+
+function findPreferredLogArtifact(artifacts: RunArtifactRow[]) {
+  const logs = artifacts.filter((artifact) => artifact?.type === 'log');
+  return (
+    logs.find((artifact) => artifact?.path.replace(/\\/g, '/') === 'logs/stdout.log') ??
+    logs.find((artifact) => artifact?.path.replace(/\\/g, '/') === 'logs/stderr.log') ??
+    logs?.[0]
+  );
 }
 
 function formatDateTime(value: string | null | undefined) {

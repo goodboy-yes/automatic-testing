@@ -34,6 +34,19 @@ describe('collectMidsceneArtifacts', () => {
     ]);
     expect(artifacts.map((artifact) => artifact.path)).toContain('visual-report.html');
   });
+
+  it('recognizes nested Midscene summary files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'midscene-artifacts-'));
+    tempDirs.push(dir);
+    fs.mkdirSync(path.join(dir, 'midscene_run', 'output'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'midscene_run', 'output', 'summary.json'), JSON.stringify({ failed: 1 }), 'utf8');
+
+    const artifacts = collectMidsceneArtifacts(dir);
+
+    expect(artifacts).toEqual([
+      { type: 'summary_json', path: 'midscene_run/output/summary.json' },
+    ]);
+  });
 });
 
 describe('parseMidsceneStepResults', () => {

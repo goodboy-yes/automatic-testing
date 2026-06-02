@@ -134,6 +134,34 @@ describe('CaseEditorPage', () => {
 
     expect(reportLink.getAttribute('href')).toBe('/api/runs/run_success/artifacts/visual-report.html');
   });
+
+  it('shows a failure log link for a failed run', async () => {
+    mockedListCaseRuns.mockResolvedValue([createRunRow({ id: 'run_failed', status: 'failed' })]);
+    mockedGetRun.mockResolvedValue(
+      createRunDetail({
+        run: createRunRow({
+          id: 'run_failed',
+          status: 'failed',
+          error_message: 'Model configuration is incomplete',
+        }),
+        artifacts: [
+          {
+            id: 'artifact_stdout',
+            run_id: 'run_failed',
+            type: 'log',
+            path: 'logs/stdout.log',
+            created_at: '2026-06-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    renderCaseEditorPage();
+
+    const logLink = await screen.findByRole('link', { name: '查看失败日志' });
+
+    expect(logLink.getAttribute('href')).toBe('/api/runs/run_failed/artifacts/logs/stdout.log');
+  });
 });
 
 function createCaseRow(overrides: Partial<CaseRow> = {}): CaseRow {

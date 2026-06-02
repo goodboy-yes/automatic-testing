@@ -198,6 +198,49 @@ describe('run API and worker', () => {
     );
   });
 
+  it('stores the Midscene summary error when stderr only contains a warning', async () => {
+    const artifactRoot = createArtifactRoot();
+    const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
+    openConnections.push(db);
+    const testCase = await createCase(app);
+    const createResponse = await app.inject({ method: 'POST', url: `/api/cases/${testCase.id}/runs` });
+    const run = createResponse.json<RunResponse>();
+    const modelError =
+      'Model configuration is incomplete: model name (MIDSCENE_MODEL_NAME) is required. See https://midscenejs.com/model-strategy.html';
+    const worker = new RunWorker({
+      db,
+      artifactsDir: artifactRoot,
+      executeMidscene: async ({ outputDir }) => {
+        const summaryPath = path.join(outputDir, 'midscene_run', 'output', 'summary.json');
+        fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+        fs.writeFileSync(
+          summaryPath,
+          JSON.stringify({
+            summary: { total: 1, successful: 0, failed: 1 },
+            results: [{ success: false, resultType: 'failed', error: modelError }],
+          }),
+          'utf8',
+        );
+        return {
+          status: 'failed',
+          exitCode: 1,
+          stdout: `error:\n    ${modelError}`,
+          stderr: 'failed to wait for network idle after 2000ms, but the script will continue.\n',
+          summaryPath: 'summary.json',
+        };
+      },
+    });
+
+    await worker.run({ runId: run.id });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/cases' });
+    await app.close();
+
+    expect(db.prepare<[string], RunResponse>('SELECT * FROM test_runs WHERE id = ?').get(run.id)?.error_message).toBe(
+      modelError,
+    );
+    expect(listResponse.json<TestCaseListItem[]>()[0]?.latest_log_path).toBe('logs/stdout.log');
+  });
+
   it('deletes a case with its runs, artifacts, and artifact directories', async () => {
     const artifactRoot = createArtifactRoot();
     const { app, db } = await createTestApp({ artifactsDir: artifactRoot });
@@ -232,6 +275,7 @@ interface TestCaseListItem extends TestCaseResponse {
   latest_run_id: string | null;
   latest_run_status: string | null;
   latest_visual_report_path: string | null;
+  latest_log_path: string | null;
 }
 
 interface RunResponse {

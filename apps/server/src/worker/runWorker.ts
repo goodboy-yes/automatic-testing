@@ -1,5 +1,7 @@
 import {
   collectMidsceneArtifacts,
+  readJsonFile,
+  type MidsceneArtifact,
   runMidsceneYaml,
   type RunMidsceneYamlInput,
   type RunMidsceneYamlResult,
@@ -73,7 +75,7 @@ export class RunWorker {
 
       writeTextArtifact(artifactDir, 'logs/stdout.log', execution.stdout);
       writeTextArtifact(artifactDir, 'logs/stderr.log', execution.stderr);
-      this.persistCollectedArtifacts(run.id, artifactDir);
+      const collectedArtifacts = this.persistCollectedArtifacts(run.id, artifactDir);
 
       if (execution.status === 'canceled') {
         this.runs.updateStatus(job.runId, {
@@ -89,7 +91,7 @@ export class RunWorker {
       this.runs.updateStatus(job.runId, {
         status,
         exitCode: execution.exitCode,
-        errorMessage: status === 'failed' ? execution.stderr || 'Midscene execution failed' : null,
+        errorMessage: status === 'failed' ? this.getFailureMessage(artifactDir, collectedArtifacts, execution) : null,
       });
       emitRunEvent({ runId: job.runId, type: 'status', payload: { status } });
     } catch (error) {
@@ -109,15 +111,71 @@ export class RunWorker {
 
   private persistCollectedArtifacts(runId: string, artifactDir: string) {
     const existingPaths = new Set(this.artifacts.listByRun(runId).map((artifact) => artifact.path));
-    for (const artifact of collectMidsceneArtifacts(artifactDir)) {
+    const collectedArtifacts = collectMidsceneArtifacts(artifactDir);
+    for (const artifact of collectedArtifacts) {
       if (existingPaths.has(artifact.path)) {
         continue;
       }
       this.artifacts.create({ runId, type: artifact.type, path: artifact.path });
     }
+    return collectedArtifacts;
+  }
+
+  private getFailureMessage(
+    artifactDir: string,
+    artifacts: MidsceneArtifact[],
+    execution: RunMidsceneYamlResult,
+  ): string {
+    for (const artifact of artifacts) {
+      if (artifact.type !== 'summary_json') {
+        continue;
+      }
+      const error = extractMidsceneSummaryError(readJsonFile(path.join(artifactDir, artifact.path)));
+      if (error) {
+        return error;
+      }
+    }
+
+    return execution.stderr.trim() || 'Midscene execution failed';
   }
 
   private emitCanceled(runId: string) {
     emitRunEvent({ runId, type: 'status', payload: { status: 'canceled' } });
   }
+}
+
+function extractMidsceneSummaryError(summary: unknown): string | null {
+  if (!isRecord(summary)) {
+    return null;
+  }
+
+  const directError = stringValue(summary.error) ?? stringValue(summary.errorMessage) ?? stringValue(summary.message);
+  if (directError) {
+    return directError;
+  }
+
+  const results = summary.results;
+  if (!Array.isArray(results)) {
+    return null;
+  }
+
+  for (const result of results) {
+    if (!isRecord(result)) {
+      continue;
+    }
+    const resultError = stringValue(result.error) ?? stringValue(result.errorMessage) ?? stringValue(result.message);
+    if (resultError) {
+      return resultError;
+    }
+  }
+
+  return null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

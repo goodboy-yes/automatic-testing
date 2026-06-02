@@ -101,6 +101,31 @@ describe('CaseListPage', () => {
     expect(mockedGetRunArtifactUrl).toHaveBeenCalledWith('run_1', 'visual-report.html');
   });
 
+  it('shows a failure log link for the latest failed run', async () => {
+    mockedListCases.mockResolvedValue([
+      createCaseRow({
+        id: 'case_1',
+        name: '登录失败',
+        latest_run_id: 'run_failed',
+        latest_run_status: 'failed',
+        latest_log_path: 'logs/stdout.log',
+      }),
+    ]);
+
+    renderCaseListPage();
+
+    const caseName = await screen.findByText('登录失败');
+    const row = caseName.closest('tr');
+    if (!row) {
+      throw new Error('Case row not found');
+    }
+
+    expect(within(row).getByText('失败')).toBeTruthy();
+    expect(within(row).getByRole('link', { name: '查看失败日志' }).getAttribute('href')).toBe(
+      '/api/runs/run_failed/artifacts/logs/stdout.log',
+    );
+  });
+
   it('deletes a case after confirmation', async () => {
     const confirmSpy = vi.spyOn(Modal, 'confirm').mockReturnValue({
       destroy: vi.fn(),
@@ -136,6 +161,7 @@ function createCaseRow(overrides: Partial<CaseListItem> = {}): CaseListItem {
     latest_run_id: null,
     latest_run_status: null,
     latest_visual_report_path: null,
+    latest_log_path: null,
     ...overrides,
   };
 }

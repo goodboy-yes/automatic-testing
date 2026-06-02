@@ -24,7 +24,8 @@ export function collectMidsceneArtifacts(outputDir: string): MidsceneArtifact[] 
 
   for (const file of files) {
     const lower = file.toLowerCase();
-    if (lower === 'summary.json' || lower === 'index.json') {
+    const filename = path.basename(lower);
+    if (filename === 'summary.json' || filename === 'index.json') {
       artifacts.push({ type: 'summary_json', path: file });
     } else if (lower.endsWith('.json')) {
       artifacts.push({ type: 'result_json', path: file });

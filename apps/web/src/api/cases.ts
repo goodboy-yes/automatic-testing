@@ -13,6 +13,7 @@ export interface CaseListItem extends CaseRow {
   latest_run_id: string | null;
   latest_run_status: string | null;
   latest_visual_report_path: string | null;
+  latest_log_path: string | null;
 }
 
 export interface CreateCaseInput {

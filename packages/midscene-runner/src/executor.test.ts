@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runMidsceneYaml, spawnProcess, type ProcessRunner } from './executor.js';
 
 describe('runMidsceneYaml', () => {
-  it('runs the Midscene CLI with yaml path, output dir, and summary file', async () => {
+  it('uses the locally installed Midscene CLI by default', async () => {
     const runProcess = vi.fn<ProcessRunner>().mockResolvedValue({
       exitCode: 0,
       stdout: 'ok',
@@ -19,8 +19,14 @@ describe('runMidsceneYaml', () => {
       runProcess,
     });
 
+    const command = runProcess.mock.calls?.[0]?.[0]?.command;
+    if (!command) {
+      throw new Error('Expected Midscene command to be passed to process runner');
+    }
+
+    expect(command.split(path.sep).join('/')).toContain('node_modules/.bin/');
+    expect(path.basename(command).toLowerCase()).toBe(process.platform === 'win32' ? 'midscene.cmd' : 'midscene');
     expect(runProcess.mock.calls?.[0]?.[0]).toMatchObject({
-      command: 'midscene',
       args: [yamlPath, '--summary', 'summary.json'],
       cwd: outputDir,
     });
@@ -31,6 +37,23 @@ describe('runMidsceneYaml', () => {
       stderr: '',
       summaryPath: 'summary.json',
     });
+  });
+
+  it('uses an explicit Midscene command when provided', async () => {
+    const runProcess = vi.fn<ProcessRunner>().mockResolvedValue({
+      exitCode: 0,
+      stdout: 'ok',
+      stderr: '',
+    });
+
+    await runMidsceneYaml({
+      yamlPath: '/tmp/case/midscene.yaml',
+      outputDir: '/tmp/case',
+      command: 'custom-midscene',
+      runProcess,
+    });
+
+    expect(runProcess.mock.calls?.[0]?.[0]?.command).toBe('custom-midscene');
   });
 
   it('marks non-zero CLI exits as failed', async () => {

@@ -14,6 +14,7 @@ export interface CaseListItem extends CaseRow {
   latest_run_id: string | null;
   latest_run_status: string | null;
   latest_visual_report_path: string | null;
+  latest_log_path: string | null;
 }
 
 export interface CreateCaseInput {
@@ -41,7 +42,8 @@ export function createCaseRepository(db: DatabaseConnection) {
              test_cases.*,
              latest_run.id AS latest_run_id,
              latest_run.status AS latest_run_status,
-             latest_visual_report.path AS latest_visual_report_path
+             latest_visual_report.path AS latest_visual_report_path,
+             latest_log.path AS latest_log_path
            FROM test_cases
            LEFT JOIN test_runs AS latest_run
              ON latest_run.id = (
@@ -57,6 +59,21 @@ export function createCaseRepository(db: DatabaseConnection) {
                FROM artifacts
                WHERE artifacts.run_id = latest_run.id AND artifacts.type = 'visual_report'
                ORDER BY created_at ASC, id ASC
+               LIMIT 1
+             )
+           LEFT JOIN artifacts AS latest_log
+             ON latest_log.id = (
+               SELECT id
+               FROM artifacts
+               WHERE artifacts.run_id = latest_run.id AND artifacts.type = 'log'
+               ORDER BY
+                 CASE artifacts.path
+                   WHEN 'logs/stdout.log' THEN 0
+                   WHEN 'logs/stderr.log' THEN 1
+                   ELSE 2
+                 END,
+                 created_at ASC,
+                 id ASC
                LIMIT 1
              )
            ORDER BY test_cases.updated_at DESC, test_cases.id DESC`,

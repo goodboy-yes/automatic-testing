@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type MidsceneExecutionStatus = 'success' | 'failed' | 'canceled';
 
@@ -41,7 +43,7 @@ export async function runMidsceneYaml(input: RunMidsceneYamlInput): Promise<RunM
   const cwd = path.resolve(input.outputDir);
   const runProcess = input.runProcess ?? spawnProcess;
   const processResult = await runProcess({
-    command: input.command ?? 'midscene',
+    command: input.command ?? resolveMidsceneCommand(),
     args: [path.resolve(input.yamlPath), '--summary', summaryPath],
     cwd,
     env: input.env,
@@ -115,4 +117,16 @@ function getExecutionStatus(result: RunProcessResult): MidsceneExecutionStatus {
     return 'canceled';
   }
   return result.exitCode === 0 ? 'success' : 'failed';
+}
+
+function resolveMidsceneCommand(): string {
+  const binaryName = process.platform === 'win32' ? 'midscene.CMD' : 'midscene';
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(moduleDir, '..', 'node_modules', '.bin', binaryName),
+    path.resolve(moduleDir, '..', '..', '..', 'node_modules', '.bin', binaryName),
+    path.resolve(process.cwd(), 'node_modules', '.bin', binaryName),
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? 'midscene';
 }
